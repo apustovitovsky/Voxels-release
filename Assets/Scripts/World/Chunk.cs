@@ -219,7 +219,7 @@ namespace Tuntenfisch.World
             m_meshFilter.sharedMesh = null;
             m_meshFilter.sharedMesh = m_mesh;
 
-            m_bakeJobHandle = new BakeJob(m_mesh.GetInstanceID()).Schedule();
+            m_bakeJobHandle = new BakeJob(m_mesh.GetEntityId()).Schedule();
             m_flags |= ChunkFlags.IsBakingMesh;
         }
 

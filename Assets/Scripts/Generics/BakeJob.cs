@@ -5,14 +5,14 @@ using UnityEngine;
 namespace Tuntenfisch.Generics
 {
     [BurstCompile]
-    public struct BakeJob : IJob
+    public readonly struct BakeJob : IJob
     {
-        private readonly int m_meshID;
+        private readonly EntityId m_meshID;
         private readonly bool m_convex;
 
-        public BakeJob(int meshID, bool convex = false)
+        public BakeJob(EntityId entityId, bool convex = false)
         {
-            m_meshID = meshID;
+            m_meshID = entityId;
             m_convex = convex;
         }
 

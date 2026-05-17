@@ -101,16 +101,16 @@ namespace Tuntenfisch.Player
                 GPUCSGPrimitive primitive = new GPUCSGPrimitive(CSGPrimitiveType.Sphere);
                 float3 scale = 4.0f;
 
-                WorldManager.Instance.DrawCSGPrimitiveHologram(primitive.PrimitiveType, hit.point, scale);
+                // WorldManager.Instance.DrawCSGPrimitiveHologram(primitive.PrimitiveType, hit.point, scale);
 
                 if (m_primaryDown)
                 {
-                    WorldManager.Instance.ApplyCSGOperation(new GPUCSGOperator(CSGOperatorIndex.Union), primitive, MaterialIndex.Dirt, hit.point, scale);
+                    //WorldManager.Instance.ApplyCSGOperation(new GPUCSGOperator(CSGOperatorIndex.Union), primitive, MaterialIndex.Dirt, hit.point, scale);
                 }
 
                 if (m_secondaryDown)
                 {
-                    WorldManager.Instance.ApplyCSGOperation(new GPUCSGOperator(CSGOperatorIndex.Difference), primitive, default, hit.point, scale);
+                    //WorldManager.Instance.ApplyCSGOperation(new GPUCSGOperator(CSGOperatorIndex.Difference), primitive, default, hit.point, scale);
                 }
             }
         }

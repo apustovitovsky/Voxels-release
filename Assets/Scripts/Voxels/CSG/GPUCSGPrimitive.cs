@@ -10,7 +10,7 @@ namespace Tuntenfisch.Voxels.CSG
     {
         public static int SizeInBytes => s_sizeInBytes;
 
-        public CSGPrimitiveType PrimitiveType => m_primitiveType;
+        public readonly CSGPrimitiveType PrimitiveType => m_primitiveType;
 
         private readonly static int s_sizeInBytes = Marshal.SizeOf<GPUCSGPrimitive>();
 
