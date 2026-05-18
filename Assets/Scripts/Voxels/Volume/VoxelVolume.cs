@@ -16,10 +16,17 @@ namespace Tuntenfisch.Voxels.Volume
         private VoxelConfig m_voxelConfig;
         private ComputeBuffer m_generationGraphNodesBuffer;
         private ComputeBuffer m_voxelVolumeCSGOperationsBuffer;
+        private int m_generateVoxelVolumeKernel;
+        private int m_applyVoxelVolumeCSGOperationsKernel;
 
         private void Awake()
         {
             m_voxelConfig = GetComponent<VoxelConfig>();
+
+            ComputeShader compute = m_voxelConfig.VoxelVolumeConfig.Compute;
+            m_generateVoxelVolumeKernel = compute.FindKernel("GenerateVoxelVolume");
+            m_applyVoxelVolumeCSGOperationsKernel = compute.FindKernel("ApplyVoxelVolumeCSGOperations");
+
             m_voxelConfig.GenerationGraph.OnDirtied += ApplyGenerationGraph;
             ApplyGenerationGraph();
         }
@@ -46,8 +53,8 @@ namespace Tuntenfisch.Voxels.Volume
             }
 
             m_voxelConfig.VoxelVolumeConfig.Compute.SetVector(ComputeShaderProperties.VoxelVolumeToWorldSpaceOffset, (Vector3)worldPosition);
-            m_voxelConfig.VoxelVolumeConfig.Compute.SetBuffer(0, ComputeShaderProperties.VoxelVolume, voxelVolumeBuffer);
-            m_voxelConfig.VoxelVolumeConfig.Compute.Dispatch(0, m_voxelConfig.VoxelVolumeConfig.NumberOfVoxels);
+            m_voxelConfig.VoxelVolumeConfig.Compute.SetBuffer(m_generateVoxelVolumeKernel, ComputeShaderProperties.VoxelVolume, voxelVolumeBuffer);
+            m_voxelConfig.VoxelVolumeConfig.Compute.Dispatch(m_generateVoxelVolumeKernel, m_voxelConfig.VoxelVolumeConfig.NumberOfVoxels);
         }
 
         public void ApplyVoxelVolumeCSGOperations(ComputeBuffer voxelVolumeBuffer, float3 worldPosition, List<GPUVoxelVolumeCSGOperation> voxelVolumeCSGOperations)
@@ -63,7 +70,7 @@ namespace Tuntenfisch.Voxels.Volume
             }
 
             m_voxelConfig.VoxelVolumeConfig.Compute.SetVector(ComputeShaderProperties.VoxelVolumeToWorldSpaceOffset, (Vector3)worldPosition);
-            m_voxelConfig.VoxelVolumeConfig.Compute.SetBuffer(1, ComputeShaderProperties.VoxelVolume, voxelVolumeBuffer);
+            m_voxelConfig.VoxelVolumeConfig.Compute.SetBuffer(m_applyVoxelVolumeCSGOperationsKernel, ComputeShaderProperties.VoxelVolume, voxelVolumeBuffer);
 
             for (int index = 0; index < voxelVolumeCSGOperations.Count;)
             {
@@ -71,10 +78,10 @@ namespace Tuntenfisch.Voxels.Volume
 
                 m_voxelVolumeCSGOperationsBuffer.SetData(voxelVolumeCSGOperations, index, 0, stride);
                 m_voxelConfig.VoxelVolumeConfig.Compute.SetInt(ComputeShaderProperties.NumberOfVoxelVolumeCSGOperations, stride);
-                m_voxelConfig.VoxelVolumeConfig.Compute.SetBuffer(1, ComputeShaderProperties.VoxelVolumeCSGOperations, m_voxelVolumeCSGOperationsBuffer);
-                m_voxelConfig.VoxelVolumeConfig.Compute.Dispatch(1, m_voxelConfig.VoxelVolumeConfig.NumberOfVoxels);
+                m_voxelConfig.VoxelVolumeConfig.Compute.SetBuffer(m_applyVoxelVolumeCSGOperationsKernel, ComputeShaderProperties.VoxelVolumeCSGOperations, m_voxelVolumeCSGOperationsBuffer);
+                m_voxelConfig.VoxelVolumeConfig.Compute.Dispatch(m_applyVoxelVolumeCSGOperationsKernel, m_voxelConfig.VoxelVolumeConfig.NumberOfVoxels);
 
-                index += stride; 
+                index += stride;
             }
         }
 
@@ -114,7 +121,7 @@ namespace Tuntenfisch.Voxels.Volume
 
             m_generationGraphNodesBuffer.SetData(m_voxelConfig.GenerationGraph.Nodes);
             m_voxelConfig.VoxelVolumeConfig.Compute.SetInt(ComputeShaderProperties.NumberOfGenerationGraphNodes, m_voxelConfig.GenerationGraph.Nodes.Count);
-            m_voxelConfig.VoxelVolumeConfig.Compute.SetBuffer(0, ComputeShaderProperties.GenerationGraphNodes, m_generationGraphNodesBuffer);
+            m_voxelConfig.VoxelVolumeConfig.Compute.SetBuffer(m_generateVoxelVolumeKernel, ComputeShaderProperties.GenerationGraphNodes, m_generationGraphNodesBuffer);
         }
     }
 }

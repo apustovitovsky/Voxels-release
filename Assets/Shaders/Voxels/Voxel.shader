@@ -57,6 +57,7 @@ Shader "Voxels/Voxel"
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
+
             struct VertexPassInput
             {
                 float4 positionOS : POSITION;
@@ -64,21 +65,17 @@ Shader "Voxels/Voxel"
                 uint materialIndex : TEXCOORD0;
                 float2 lightmapUV : TEXCOORD1;
 
-                // x = Dirt
-                // y = Grass
-                // z = Rock
-                // w = Snow
+                // Temporary contract:
+                // packedMaterialWeights.x stores weights0 for slots 0..3
+                // packedMaterialWeights.y stores weights1 for slots 4..7, currently ignored by the shader
                 uint2 packedMaterialWeights : TEXCOORD2;
             };
 
+            #include "Assets/Compute/Include/Packing2.hlsl"
+
             float4 UnpackMaterialWeights(uint2 packedWeights)
             {
-                uint wx = packedWeights.x & 0xFFFF;
-                uint wy = packedWeights.x >> 16;
-                uint wz = packedWeights.y & 0xFFFF;
-                uint ww = packedWeights.y >> 16;
-
-                return float4(wx, wy, wz, ww) / 65535.0f;
+                return UnpackBytes01(packedWeights.x);
             }
 
             struct GeometryPassInput
@@ -127,11 +124,8 @@ Shader "Voxels/Voxel"
                     float4 shadowCoord : TEXCOORD6;
                 #endif
 
-                // Новые фиксированные веса материалов из vertex buffer.
-                // x = Dirt
-                // y = Grass
-                // z = Rock
-                // w = Snow
+                // Averaged material weights for slots 0..3 only.
+                // Slots 4..7 are currently ignored in the rendering path.
                 nointerpolation half4 fixedMaterialWeights : TEXCOORD7;
             };
 
@@ -292,7 +286,13 @@ Shader "Voxels/Voxel"
                     w = float4(1, 0, 0, 0);
                 }
 
-                TriplanarData dirt = ApplyTriplanarTexturing
+                // Temporary slot mapping for weights0:
+                // slot0 -> texture layer 0
+                // slot1 -> texture layer 3
+                // slot2 -> texture layer 1
+                // slot3 -> texture layer 4
+
+                TriplanarData slot0 = ApplyTriplanarTexturing
                 (
                     input.positionWS,
                     input.normalWS,
@@ -303,18 +303,7 @@ Shader "Voxels/Voxel"
                     0
                 );
 
-                TriplanarData grass = ApplyTriplanarTexturing
-                (
-                    input.positionWS,
-                    input.normalWS,
-                    materialAlbedoTextures,
-                    materialNormalTextures,
-                    materialMOHSTextures,
-                    sampler_linear_repeat,
-                    3
-                );
-
-                TriplanarData rock = ApplyTriplanarTexturing
+                TriplanarData slot1 = ApplyTriplanarTexturing
                 (
                     input.positionWS,
                     input.normalWS,
@@ -325,7 +314,7 @@ Shader "Voxels/Voxel"
                     1
                 );
 
-                TriplanarData snow = ApplyTriplanarTexturing
+                TriplanarData slot2 = ApplyTriplanarTexturing
                 (
                     input.positionWS,
                     input.normalWS,
@@ -333,45 +322,56 @@ Shader "Voxels/Voxel"
                     materialNormalTextures,
                     materialMOHSTextures,
                     sampler_linear_repeat,
-                    4
+                    2
+                );
+
+                TriplanarData slot3 = ApplyTriplanarTexturing
+                (
+                    input.positionWS,
+                    input.normalWS,
+                    materialAlbedoTextures,
+                    materialNormalTextures,
+                    materialMOHSTextures,
+                    sampler_linear_repeat,
+                    3
                 );
 
                 surfaceData.albedo =
-                    w.x * dirt.albedo.rgb +
-                    w.y * grass.albedo.rgb +
-                    w.z * rock.albedo.rgb +
-                    w.w * snow.albedo.rgb;
+                    w.x * slot0.albedo.rgb +
+                    w.y * slot1.albedo.rgb +
+                    w.z * slot2.albedo.rgb +
+                    w.w * slot3.albedo.rgb;
 
                 surfaceData.alpha =
-                    w.x * dirt.albedo.a +
-                    w.y * grass.albedo.a +
-                    w.z * rock.albedo.a +
-                    w.w * snow.albedo.a;
+                    w.x * slot0.albedo.a +
+                    w.y * slot1.albedo.a +
+                    w.z * slot2.albedo.a +
+                    w.w * slot3.albedo.a;
 
-                // Use SurfaceData.normalTS to store our world-space normal, same as before.
+                // Use SurfaceData.normalTS to store world-space normal.
                 surfaceData.normalTS =
-                    w.x * dirt.normalWS +
-                    w.y * grass.normalWS +
-                    w.z * rock.normalWS +
-                    w.w * snow.normalWS;
+                    w.x * slot0.normalWS +
+                    w.y * slot1.normalWS +
+                    w.z * slot2.normalWS +
+                    w.w * slot3.normalWS;
 
                 surfaceData.metallic =
-                    w.x * dirt.metallic +
-                    w.y * grass.metallic +
-                    w.z * rock.metallic +
-                    w.w * snow.metallic;
+                    w.x * slot0.metallic +
+                    w.y * slot1.metallic +
+                    w.z * slot2.metallic +
+                    w.w * slot3.metallic;
 
                 surfaceData.occlusion =
-                    w.x * dirt.occlusion +
-                    w.y * grass.occlusion +
-                    w.z * rock.occlusion +
-                    w.w * snow.occlusion;
+                    w.x * slot0.occlusion +
+                    w.y * slot1.occlusion +
+                    w.z * slot2.occlusion +
+                    w.w * slot3.occlusion;
 
                 surfaceData.smoothness =
-                    w.x * dirt.smoothness +
-                    w.y * grass.smoothness +
-                    w.z * rock.smoothness +
-                    w.w * snow.smoothness;
+                    w.x * slot0.smoothness +
+                    w.y * slot1.smoothness +
+                    w.z * slot2.smoothness +
+                    w.w * slot3.smoothness;
 
                 return surfaceData;
             }

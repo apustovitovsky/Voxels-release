@@ -94,7 +94,7 @@ namespace Tuntenfisch.Player
 
         private void HandleWorldInteraction()
         {
-            Ray ray = new Ray(m_camera.transform.position, m_camera.transform.forward);
+            Ray ray = new(m_camera.transform.position, m_camera.transform.forward);
 
             if (Physics.Raycast(ray, out RaycastHit hit, Mathf.Infinity, ~m_playerLayerMask))
             {
@@ -110,7 +110,7 @@ namespace Tuntenfisch.Player
 
                 if (m_secondaryDown)
                 {
-                    //WorldManager.Instance.ApplyCSGOperation(new GPUCSGOperator(CSGOperatorIndex.Difference), primitive, default, hit.point, scale);
+                    WorldManager.Instance.ApplyCSGOperation(new GPUCSGOperator(CSGOperatorIndex.Difference), primitive, default, hit.point, scale);
                 }
             }
         }

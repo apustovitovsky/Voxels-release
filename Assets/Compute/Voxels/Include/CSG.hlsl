@@ -3,7 +3,8 @@
 
 // Parts below are based on articles by Inigo Quilez (https://www.iquilezles.org/).
 #include "Assets/Compute/Include/Enumeration.hlsl"
-#include "Assets/Compute/Voxels/Include/Voxel.hlsl"
+#include "Assets/Compute/Voxels/Include/Voxel2.hlsl"
+#include "Assets/Compute/Include/MaterialWeights.hlsl"
 
 ENUM CSGOperatorIndex
 {
@@ -49,15 +50,63 @@ Voxel Difference(Voxel lhs, Voxel rhs)
     return Intersection(lhs, rhs);
 }
 
+// Voxel SmoothUnion(Voxel lhs, Voxel rhs, float smoothing)
+// {
+//     float h = max(smoothing - abs(lhs.GetValue() - rhs.GetValue()), 0.0f);
+//     float m = 0.25f * h * h / smoothing;
+//     float n = 0.50f * h / smoothing;
+
+//     Voxel voxel = Voxel::Create();
+//     voxel.valueAndGradient = float4(min(lhs.GetValue(), rhs.GetValue()) - m, lerp(lhs.GetGradient(), rhs.GetGradient(), lhs.GetValue() < rhs.GetValue() ? n : 1.0f - n));
+//     voxel.materialIndex = lhs.GetValue() < rhs.GetValue() ? lhs.materialIndex : rhs.materialIndex;
+
+//     float materialBlend = saturate(
+//         0.5f + 0.5f * (rhs.GetValue() - lhs.GetValue()) / max(smoothing, 0.0001f)
+//     );
+
+//     float4 weights0 = lerp(rhs.GetMaterialWeights0(), lhs.GetMaterialWeights0(), materialBlend);
+//     float4 weights1 = lerp(rhs.GetMaterialWeights1(), lhs.GetMaterialWeights1(), materialBlend);
+
+//     NormalizeMaterialWeights(weights0, weights1);
+
+//     voxel.SetMaterialWeights(weights0, weights1);
+
+//     return voxel;
+// }
+
 Voxel SmoothUnion(Voxel lhs, Voxel rhs, float smoothing)
 {
-    float h = max(smoothing - abs(lhs.GetValue() - rhs.GetValue()), 0.0f);
-    float m = 0.25f * h * h / smoothing;
-    float n = 0.50f * h / smoothing;
+    float lhsValue = lhs.GetValue();
+    float rhsValue = rhs.GetValue();
+
+    float invSmoothing = rcp(smoothing);
+
+    float h = max(smoothing - abs(lhsValue - rhsValue), 0.0f);
+    float m = 0.25f * h * h * invSmoothing;
+    float n = 0.50f * h * invSmoothing;
+
+    bool lhsWins = lhsValue < rhsValue;
+
+    float gradientBlend = lhsWins ? n : 1.0f - n;
 
     Voxel voxel = Voxel::Create();
-    voxel.valueAndGradient = float4(min(lhs.GetValue(), rhs.GetValue()) - m, lerp(lhs.GetGradient(), rhs.GetGradient(), lhs.GetValue() < rhs.GetValue() ? n : 1.0f - n));
-    voxel.materialIndex = lhs.GetValue() < rhs.GetValue() ? lhs.materialIndex : rhs.materialIndex;
+
+    voxel.valueAndGradient = float4(
+        min(lhsValue, rhsValue) - m,
+        lerp(lhs.GetGradient(), rhs.GetGradient(), gradientBlend)
+    );
+
+    voxel.materialIndex = lhsWins ? lhs.materialIndex : rhs.materialIndex;
+
+    float materialBlend = saturate(
+        0.5f + 0.5f * (rhsValue - lhsValue) * invSmoothing
+    );
+
+    float4 weights0 = lerp(rhs.GetMaterialWeights0(), lhs.GetMaterialWeights0(), materialBlend);
+    float4 weights1 = lerp(rhs.GetMaterialWeights1(), lhs.GetMaterialWeights1(), materialBlend);
+
+    NormalizeMaterialWeights(weights0, weights1);
+    voxel.SetMaterialWeights(weights0, weights1);
 
     return voxel;
 }
@@ -77,7 +126,7 @@ Voxel SmoothDifference(Voxel lhs, Voxel rhs, float smoothing)
 {
     rhs.materialIndex = lhs.materialIndex;
     rhs.valueAndGradient *= -1.0f;
-    
+
     return SmoothIntersection(lhs, rhs, smoothing);
 }
 
@@ -113,8 +162,8 @@ Voxel ApplyCSGOperator(Voxel lhs, Voxel rhs, CSGOperator csgOperator)
 }
 
 // When combining a primitive (effectively an SDF) with other SDFs, the primitive
-// will perturb the shape of nearby SDFs and hence alter the generated mesh's 
-// geometry. But the mesh's geometry is even affected when the the isosurface the 
+// will perturb the shape of nearby SDFs and hence alter the generated mesh's
+// geometry. But the mesh's geometry is even affected when the the isosurface the
 // primitive is describing isn't intersecting any of the other isosurfaces at all.
 //
 // This is due to small values, i.e. values close to 0, near the primitive's isosurface
@@ -148,7 +197,7 @@ float4 EvaluateCSGCuboid(float3 position)
     float3 d = abs(position) - 0.5f;
     float3 smoothing = sign(position);
     float g = max(d.x, max(d.y, d.z));
-    
+
     valueAndGradient.x = length(max(d, 0.0f)) + min(max(d.x, max(d.y, d.z)), 0.0f);
     valueAndGradient.x *= csgPrimitiveValueMultiplier;
     valueAndGradient.yzw = smoothing * (g > 0.0f ? normalize(max(d, 0.0f)) : step(d.yzx, d.xyz) * step(d.zxy, d.xyz));

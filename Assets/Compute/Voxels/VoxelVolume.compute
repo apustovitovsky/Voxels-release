@@ -1,7 +1,7 @@
 #pragma kernel GenerateVoxelVolume
 #pragma kernel ApplyVoxelVolumeCSGOperations
 
-#include "Assets/Compute/Voxels/Include/GenerationGraph.hlsl"
+#include "Assets/Compute/Voxels/Include/GenerationGraph2.hlsl"
 #include "Assets/Compute/Voxels/Include/VoxelVolume.hlsl"
 
 struct VoxelVolumeCSGOperation
