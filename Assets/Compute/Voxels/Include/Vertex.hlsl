@@ -8,6 +8,7 @@ struct Vertex
     float3 position;
     uint2 halfPrecisionNormal;
     uint materialIndex;
+    uint2 packedMaterialWeights;
 
     float3 GetPosition()
     {
@@ -39,13 +40,56 @@ struct Vertex
         materialIndex = newMaterialIndex;
     }
 
-    static Vertex Create(float3 position = 0.0f, float3 normal = 0.0f, uint materialIndex = 0)
+    // half4 GetMaterialWeights()
+    // {
+    //     return materialWeights;
+    // }
+
+    // void SetMaterialWeights(half4 newMaterialWeights)
+    // {
+    //     materialWeights = newMaterialWeights;
+    // }
+
+    float4 GetMaterialWeights()
+    {
+        uint wx = packedMaterialWeights.x & 0xFFFF;
+        uint wy = packedMaterialWeights.x >> 16;
+        uint wz = packedMaterialWeights.y & 0xFFFF;
+        uint ww = packedMaterialWeights.y >> 16;
+
+        return float4(wx, wy, wz, ww) / 65535.0f;
+    }
+
+    void SetMaterialWeights(float4 weights)
+    {
+        weights = saturate(weights);
+
+        uint4 quantized = (uint4)round(weights * 65535.0f);
+
+        packedMaterialWeights.x = (quantized.x & 0xFFFF) | (quantized.y << 16);
+        packedMaterialWeights.y = (quantized.z & 0xFFFF) | (quantized.w << 16);
+    }
+
+    // static Vertex Create(
+    //     float3 position = 0.0f,
+    //     float3 normal = 0.0f,
+    //     uint materialIndex = 0,
+    //     half4 materialWeights = 0.0f)
+    // {
+    //     Vertex vertex;
+    //     vertex.position = position;
+    //     vertex. halfPrecisionNormal = uint2(PackFloats(normal.xy), PackFloats(float2(normal.z, 0.0f)));
+    //     vertex.materialIndex = materialIndex;
+    //     vertex.materialWeights = materialWeights;
+    //     return vertex;
+    // }
+        static Vertex Create(float3 position = 0.0f, float3 normal = 0.0f, uint materialIndex = 0, float4 materialWeights = 0.0f)
     {
         Vertex vertex;
         vertex.position = position;
-        vertex. halfPrecisionNormal = uint2(PackFloats(normal.xy), PackFloats(float2(normal.z, 0.0f)));
+        vertex.halfPrecisionNormal = uint2(PackFloats(normal.xy), PackFloats(float2(normal.z, 0.0f)));
         vertex.materialIndex = materialIndex;
-
+        vertex.SetMaterialWeights(materialWeights);
         return vertex;
     }
 };

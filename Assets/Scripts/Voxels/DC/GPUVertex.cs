@@ -11,20 +11,23 @@ namespace Tuntenfisch.Voxels.DC
         public static int SizeInBytes => s_sizeInBytes;
         public static VertexAttributeDescriptor[] Attributes => s_attributes;
 
+
         private static readonly int s_sizeInBytes = Marshal.SizeOf<GPUVertex>();
         private static readonly VertexAttributeDescriptor[] s_attributes =
         {
-            new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
-            new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float16, 4),
-            new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.UInt32, 1)
+            new(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
+            new(VertexAttribute.Normal, VertexAttributeFormat.Float16, 4),
+            new(VertexAttribute.TexCoord0, VertexAttributeFormat.UInt32, 1),
+            new(VertexAttribute.TexCoord2, VertexAttributeFormat.UInt32, 2)
         };
 
-        public float3 Position => m_position;
-        public half4 Normal => m_normal;
-        public MaterialIndex MaterialIndex => m_materialIndex;
+        public readonly float3 Position => m_position;
+        public readonly half4 Normal => m_normal;
+        public readonly MaterialIndex MaterialIndex => m_materialIndex;
 
         private float3 m_position;
         private half4 m_normal;
         private readonly MaterialIndex m_materialIndex;
+        private uint2 m_packedMaterialWeights;
     }
 }

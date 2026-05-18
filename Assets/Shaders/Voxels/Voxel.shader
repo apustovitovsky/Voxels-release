@@ -63,7 +63,23 @@ Shader "Voxels/Voxel"
                 float4 normalOS : NORMAL;
                 uint materialIndex : TEXCOORD0;
                 float2 lightmapUV : TEXCOORD1;
+
+                // x = Dirt
+                // y = Grass
+                // z = Rock
+                // w = Snow
+                uint2 packedMaterialWeights : TEXCOORD2;
             };
+
+            float4 UnpackMaterialWeights(uint2 packedWeights)
+            {
+                uint wx = packedWeights.x & 0xFFFF;
+                uint wy = packedWeights.x >> 16;
+                uint wz = packedWeights.y & 0xFFFF;
+                uint ww = packedWeights.y >> 16;
+
+                return float4(wx, wy, wz, ww) / 65535.0f;
+            }
 
             struct GeometryPassInput
             {
@@ -82,6 +98,9 @@ Shader "Voxels/Voxel"
                 #if defined(REQUIRES_VERTEX_SHADOW_COORD_INTERPOLATOR)
                     float4 shadowCoord : TEXCOORD5;
                 #endif
+
+                // Веса, пришедшие из mesh vertex buffer.
+                half4 materialWeights : TEXCOORD6;
             };
 
             struct FragmentPassInput
@@ -89,8 +108,13 @@ Shader "Voxels/Voxel"
                 float4 positionCS : SV_POSITION;
                 float3 positionWS : TEXCOORD0;
                 half3 normalWS : TEXCOORD1;
+
+                // Старые индексы трёх вершин треугольника.
                 uint3 materialIndices : TEXCOORD2;
-                half3 materialWeights : TEXCOORD3;
+
+                // Старые barycentric-веса трёх вершин треугольника.
+                half3 triangleMaterialWeights : TEXCOORD3;
+
                 DECLARE_LIGHTMAP_OR_SH(lightmapUV, vertexSH, 4);
 
                 #if defined(_ADDITIONAL_LIGHTS_VERTEX)
@@ -102,6 +126,13 @@ Shader "Voxels/Voxel"
                 #if defined(REQUIRES_VERTEX_SHADOW_COORD_INTERPOLATOR)
                     float4 shadowCoord : TEXCOORD6;
                 #endif
+
+                // Новые фиксированные веса материалов из vertex buffer.
+                // x = Dirt
+                // y = Grass
+                // z = Rock
+                // w = Snow
+                nointerpolation half4 fixedMaterialWeights : TEXCOORD7;
             };
 
             float cosOfHalfSharpFeatureAngle;
@@ -127,6 +158,8 @@ Shader "Voxels/Voxel"
 
                 output.normalWS = NormalizeNormalPerVertex(normalInputs.normalWS);
                 output.materialIndex = input.materialIndex;
+
+                output.materialWeights = UnpackMaterialWeights(input.packedMaterialWeights);
 
                 OUTPUT_LIGHTMAP_UV(input.lightmapUV, unity_LightmapST, output.lightmapUV);
                 OUTPUT_SH(output.normalWS.xyz, output.vertexSH);
@@ -157,6 +190,8 @@ Shader "Voxels/Voxel"
                 uint3 materialIndices = float3(inputs[0].materialIndex, inputs[1].materialIndex, inputs[2].materialIndex);
                 float3 faceNormalWS = normalize(cross(inputs[1].positionWS - inputs[0].positionWS, inputs[2].positionWS - inputs[0].positionWS));
 
+                half4 triangleFixedMaterialWeights = (inputs[0].materialWeights + inputs[1].materialWeights + inputs[2].materialWeights) / 3.0h;
+
                 for (uint index = 0; index < 3; index++)
                 {
                     GeometryPassInput input = inputs[index];
@@ -167,7 +202,9 @@ Shader "Voxels/Voxel"
                     output.positionWS = input.positionWS;
                     output.normalWS = input.normalWS;
                     output.materialIndices = materialIndices;
-                    output.materialWeights = half3x3Identity[index];
+                    // output.materialWeights = half3x3Identity[index];
+                    output.triangleMaterialWeights = half3x3Identity[index];
+                    output.fixedMaterialWeights = triangleFixedMaterialWeights;
 
                     #if defined(LIGHTMAP_ON)
                         output.lightmapUV = input.lightmapUV;
@@ -192,7 +229,9 @@ Shader "Voxels/Voxel"
 
             float3 GetMaterialBlendWeights(FragmentPassInput input, half3 heights)
             {
-                float3 materialWeights = abs(input.materialWeights);
+                // float3 materialWeights = abs(input.materialWeights);
+                float3 materialWeights = abs(input.triangleMaterialWeights);
+
                 materialWeights = saturate(materialWeights - _BlendOffset);
                 materialWeights *= abs(lerp(1.0h, heights, _BlendHeightStrength));
                 materialWeights = pow(materialWeights, _BlendExponent);
@@ -201,38 +240,138 @@ Shader "Voxels/Voxel"
                 return materialWeights;
             }
 
+            // SurfaceData CreateSurfaceData(FragmentPassInput input)
+            // {
+            //     SurfaceData surfaceData = (SurfaceData)0;
+            //     TriplanarData triplanarDatas[3];
+
+            //     for (uint index = 0; index < 3; index++)
+            //     {
+            //         triplanarDatas[index] = ApplyTriplanarTexturing
+            //         (
+            //             input.positionWS,
+            //             input.normalWS,
+            //             materialAlbedoTextures,
+            //             materialNormalTextures,
+            //             materialMOHSTextures,
+            //             sampler_linear_repeat,
+            //             input.materialIndices[index]
+            //         );
+            //     }
+
+            //     half3 heights = half3(triplanarDatas[0].height, triplanarDatas[1].height, triplanarDatas[2].height);
+            //     float3 materialWeights = GetMaterialBlendWeights(input, heights);
+
+            //     for (index = 0; index < 3; index++)
+            //     {
+            //         surfaceData.albedo += materialWeights[index] * triplanarDatas[index].albedo.rgb;
+            //         surfaceData.alpha += materialWeights[index] * triplanarDatas[index].albedo.a;
+            //         // Use SurfaceData's normalTS field to store our normalWS.
+            //         surfaceData.normalTS += materialWeights[index] * triplanarDatas[index].normalWS;
+            //         surfaceData.metallic += materialWeights[index] * triplanarDatas[index].metallic;
+            //         surfaceData.occlusion += materialWeights[index] * triplanarDatas[index].occlusion;
+            //         surfaceData.smoothness += materialWeights[index] * triplanarDatas[index].smoothness;
+            //     }
+
+            //     return surfaceData;
+            // }
+
             SurfaceData CreateSurfaceData(FragmentPassInput input)
             {
                 SurfaceData surfaceData = (SurfaceData)0;
-                TriplanarData triplanarDatas[3];
 
-                for (uint index = 0; index < 3; index++)
+                float4 w = input.fixedMaterialWeights;
+                float sum = w.x + w.y + w.z + w.w;
+
+                if (sum > 0.0001f)
                 {
-                    triplanarDatas[index] = ApplyTriplanarTexturing
-                    (
-                        input.positionWS,
-                        input.normalWS,
-                        materialAlbedoTextures,
-                        materialNormalTextures,
-                        materialMOHSTextures,
-                        sampler_linear_repeat,
-                        input.materialIndices[index]
-                    );
+                    w /= sum;
+                }
+                else
+                {
+                    w = float4(1, 0, 0, 0);
                 }
 
-                half3 heights = half3(triplanarDatas[0].height, triplanarDatas[1].height, triplanarDatas[2].height);
-                float3 materialWeights = GetMaterialBlendWeights(input, heights);
+                TriplanarData dirt = ApplyTriplanarTexturing
+                (
+                    input.positionWS,
+                    input.normalWS,
+                    materialAlbedoTextures,
+                    materialNormalTextures,
+                    materialMOHSTextures,
+                    sampler_linear_repeat,
+                    0
+                );
 
-                for (index = 0; index < 3; index++)
-                {
-                    surfaceData.albedo += materialWeights[index] * triplanarDatas[index].albedo.rgb;
-                    surfaceData.alpha += materialWeights[index] * triplanarDatas[index].albedo.a;
-                    // Use SurfaceData's normalTS field to store our normalWS.
-                    surfaceData.normalTS += materialWeights[index] * triplanarDatas[index].normalWS;
-                    surfaceData.metallic += materialWeights[index] * triplanarDatas[index].metallic;
-                    surfaceData.occlusion += materialWeights[index] * triplanarDatas[index].occlusion;
-                    surfaceData.smoothness += materialWeights[index] * triplanarDatas[index].smoothness;
-                }
+                TriplanarData grass = ApplyTriplanarTexturing
+                (
+                    input.positionWS,
+                    input.normalWS,
+                    materialAlbedoTextures,
+                    materialNormalTextures,
+                    materialMOHSTextures,
+                    sampler_linear_repeat,
+                    3
+                );
+
+                TriplanarData rock = ApplyTriplanarTexturing
+                (
+                    input.positionWS,
+                    input.normalWS,
+                    materialAlbedoTextures,
+                    materialNormalTextures,
+                    materialMOHSTextures,
+                    sampler_linear_repeat,
+                    1
+                );
+
+                TriplanarData snow = ApplyTriplanarTexturing
+                (
+                    input.positionWS,
+                    input.normalWS,
+                    materialAlbedoTextures,
+                    materialNormalTextures,
+                    materialMOHSTextures,
+                    sampler_linear_repeat,
+                    4
+                );
+
+                surfaceData.albedo =
+                    w.x * dirt.albedo.rgb +
+                    w.y * grass.albedo.rgb +
+                    w.z * rock.albedo.rgb +
+                    w.w * snow.albedo.rgb;
+
+                surfaceData.alpha =
+                    w.x * dirt.albedo.a +
+                    w.y * grass.albedo.a +
+                    w.z * rock.albedo.a +
+                    w.w * snow.albedo.a;
+
+                // Use SurfaceData.normalTS to store our world-space normal, same as before.
+                surfaceData.normalTS =
+                    w.x * dirt.normalWS +
+                    w.y * grass.normalWS +
+                    w.z * rock.normalWS +
+                    w.w * snow.normalWS;
+
+                surfaceData.metallic =
+                    w.x * dirt.metallic +
+                    w.y * grass.metallic +
+                    w.z * rock.metallic +
+                    w.w * snow.metallic;
+
+                surfaceData.occlusion =
+                    w.x * dirt.occlusion +
+                    w.y * grass.occlusion +
+                    w.z * rock.occlusion +
+                    w.w * snow.occlusion;
+
+                surfaceData.smoothness =
+                    w.x * dirt.smoothness +
+                    w.y * grass.smoothness +
+                    w.z * rock.smoothness +
+                    w.w * snow.smoothness;
 
                 return surfaceData;
             }
@@ -277,6 +416,20 @@ Shader "Voxels/Voxel"
 
                 return color;
             }
+
+            // half4 LitPassFragment(FragmentPassInput input) : SV_Target
+            // {
+            //     float4 w = input.fixedMaterialWeights;
+            //     float sum = w.x + w.y + w.z + w.w;
+
+            //     if (sum > 0.0001f)
+            //     {
+            //         w /= sum;
+            //     }
+
+            //     half3 debugColor = half3(w.x, w.y, w.z) + w.w.xxx;
+            //     return half4(debugColor, 1.0h);
+            // }
 
             ENDHLSL
 
@@ -328,7 +481,7 @@ Shader "Voxels/Voxel"
             #pragma fragment DepthNormalsFragment
 
             #include "Assets/Shaders/Voxels/Include/DepthNormalsPass.hlsl"
-            
+
             ENDHLSL
 
         }
