@@ -4,8 +4,6 @@
 // Parts below are based on articles by Inigo Quilez (https://www.iquilezles.org/).
 #include "Assets/Compute/Include/Enumeration.hlsl"
 #include "Assets/Compute/Voxels/Include/Voxel2.hlsl"
-#include "Assets/Compute/Include/MaterialWeights.hlsl"
-
 ENUM CSGOperatorIndex
 {
     static const uint Union = 0;
@@ -22,11 +20,96 @@ ENUM CSGPrimitiveType
     static const uint Cuboid = 1;
 };
 
+void BuildMaterialSetFromWeights(float materialSetWeightSums[16], out uint4 materialSetIndices, out float4 materialSetWeights)
+{
+    materialSetIndices = 0;
+    materialSetWeights = 0.0f;
+
+    [unroll]
+    for (uint materialIndex = 0; materialIndex < 16; materialIndex++)
+    {
+        float weight = materialSetWeightSums[materialIndex];
+
+        if (weight > materialSetWeights.x)
+        {
+            materialSetWeights.w = materialSetWeights.z;
+            materialSetIndices.w = materialSetIndices.z;
+            materialSetWeights.z = materialSetWeights.y;
+            materialSetIndices.z = materialSetIndices.y;
+            materialSetWeights.y = materialSetWeights.x;
+            materialSetIndices.y = materialSetIndices.x;
+            materialSetWeights.x = weight;
+            materialSetIndices.x = materialIndex;
+        }
+        else if (weight > materialSetWeights.y)
+        {
+            materialSetWeights.w = materialSetWeights.z;
+            materialSetIndices.w = materialSetIndices.z;
+            materialSetWeights.z = materialSetWeights.y;
+            materialSetIndices.z = materialSetIndices.y;
+            materialSetWeights.y = weight;
+            materialSetIndices.y = materialIndex;
+        }
+        else if (weight > materialSetWeights.z)
+        {
+            materialSetWeights.w = materialSetWeights.z;
+            materialSetIndices.w = materialSetIndices.z;
+            materialSetWeights.z = weight;
+            materialSetIndices.z = materialIndex;
+        }
+        else if (weight > materialSetWeights.w)
+        {
+            materialSetWeights.w = weight;
+            materialSetIndices.w = materialIndex;
+        }
+    }
+
+    float sum = materialSetWeights.x + materialSetWeights.y + materialSetWeights.z + materialSetWeights.w;
+
+    if (sum > 0.0001f)
+    {
+        materialSetWeights /= sum;
+    }
+    else
+    {
+        materialSetIndices = uint4(materialSetIndices.x, 0, 0, 0);
+        materialSetWeights = float4(1, 0, 0, 0);
+    }
+}
+
+Voxel BlendMaterialSets(Voxel lhs, Voxel rhs, float lhsWeight, float rhsWeight)
+{
+    float materialSetWeightSums[16] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+
+    [unroll]
+    for (uint index = 0; index < 4; index++)
+    {
+        materialSetWeightSums[lhs.materialSetIndices[index]] += lhsWeight * lhs.materialSetWeights[index];
+        materialSetWeightSums[rhs.materialSetIndices[index]] += rhsWeight * rhs.materialSetWeights[index];
+    }
+
+    uint4 materialSetIndices;
+    float4 materialSetWeights;
+    BuildMaterialSetFromWeights(materialSetWeightSums, materialSetIndices, materialSetWeights);
+
+    Voxel voxel = Voxel::Create();
+    voxel.SetMaterialSet(materialSetIndices, materialSetWeights);
+
+    return voxel;
+}
+
 Voxel Union(Voxel lhs, Voxel rhs)
 {
     Voxel voxel = Voxel::Create();
-    voxel.valueAndGradient = lhs.GetValue() < rhs.GetValue() ? lhs.valueAndGradient : rhs.valueAndGradient;
-    voxel.materialIndex = lhs.GetValue() < rhs.GetValue() ? lhs.materialIndex : rhs.materialIndex;
+
+    if (lhs.GetValue() < rhs.GetValue())
+    {
+        voxel = lhs;
+    }
+    else
+    {
+        voxel = rhs;
+    }
 
     return voxel;
 }
@@ -44,38 +127,20 @@ Voxel Intersection(Voxel lhs, Voxel rhs)
 
 Voxel Difference(Voxel lhs, Voxel rhs)
 {
-    rhs.materialIndex = lhs.materialIndex;
+    rhs.materialSetIndices = lhs.materialSetIndices;
+    rhs.materialSetWeights = lhs.materialSetWeights;
     rhs.valueAndGradient *= -1.0f;
 
     return Intersection(lhs, rhs);
 }
 
-// Voxel SmoothUnion(Voxel lhs, Voxel rhs, float smoothing)
-// {
-//     float h = max(smoothing - abs(lhs.GetValue() - rhs.GetValue()), 0.0f);
-//     float m = 0.25f * h * h / smoothing;
-//     float n = 0.50f * h / smoothing;
-
-//     Voxel voxel = Voxel::Create();
-//     voxel.valueAndGradient = float4(min(lhs.GetValue(), rhs.GetValue()) - m, lerp(lhs.GetGradient(), rhs.GetGradient(), lhs.GetValue() < rhs.GetValue() ? n : 1.0f - n));
-//     voxel.materialIndex = lhs.GetValue() < rhs.GetValue() ? lhs.materialIndex : rhs.materialIndex;
-
-//     float materialBlend = saturate(
-//         0.5f + 0.5f * (rhs.GetValue() - lhs.GetValue()) / max(smoothing, 0.0001f)
-//     );
-
-//     float4 weights0 = lerp(rhs.GetMaterialWeights0(), lhs.GetMaterialWeights0(), materialBlend);
-//     float4 weights1 = lerp(rhs.GetMaterialWeights1(), lhs.GetMaterialWeights1(), materialBlend);
-
-//     NormalizeMaterialWeights(weights0, weights1);
-
-//     voxel.SetMaterialWeights(weights0, weights1);
-
-//     return voxel;
-// }
-
 Voxel SmoothUnion(Voxel lhs, Voxel rhs, float smoothing)
 {
+    if (smoothing <= 0.0001f)
+    {
+        return Union(lhs, rhs);
+    }
+
     float lhsValue = lhs.GetValue();
     float rhsValue = rhs.GetValue();
 
@@ -88,31 +153,25 @@ Voxel SmoothUnion(Voxel lhs, Voxel rhs, float smoothing)
     bool lhsWins = lhsValue < rhsValue;
 
     float gradientBlend = lhsWins ? n : 1.0f - n;
+    float materialBlend = saturate(0.5f + 0.5f * (rhsValue - lhsValue) * invSmoothing);
 
-    Voxel voxel = Voxel::Create();
+    Voxel voxel = BlendMaterialSets(lhs, rhs, materialBlend, 1.0f - materialBlend);
 
     voxel.valueAndGradient = float4(
         min(lhsValue, rhsValue) - m,
         lerp(lhs.GetGradient(), rhs.GetGradient(), gradientBlend)
     );
 
-    voxel.materialIndex = lhsWins ? lhs.materialIndex : rhs.materialIndex;
-
-    float materialBlend = saturate(
-        0.5f + 0.5f * (rhsValue - lhsValue) * invSmoothing
-    );
-
-    float4 weights0 = lerp(rhs.GetMaterialWeights0(), lhs.GetMaterialWeights0(), materialBlend);
-    float4 weights1 = lerp(rhs.GetMaterialWeights1(), lhs.GetMaterialWeights1(), materialBlend);
-
-    NormalizeMaterialWeights(weights0, weights1);
-    voxel.SetMaterialWeights(weights0, weights1);
-
     return voxel;
 }
 
 Voxel SmoothIntersection(Voxel lhs, Voxel rhs, float smoothing)
 {
+    if (smoothing <= 0.0001f)
+    {
+        return Intersection(lhs, rhs);
+    }
+
     lhs.valueAndGradient *= -1.0f;
     rhs.valueAndGradient *= -1.0f;
 
@@ -124,7 +183,13 @@ Voxel SmoothIntersection(Voxel lhs, Voxel rhs, float smoothing)
 
 Voxel SmoothDifference(Voxel lhs, Voxel rhs, float smoothing)
 {
-    rhs.materialIndex = lhs.materialIndex;
+    if (smoothing <= 0.0001f)
+    {
+        return Difference(lhs, rhs);
+    }
+
+    rhs.materialSetIndices = lhs.materialSetIndices;
+    rhs.materialSetWeights = lhs.materialSetWeights;
     rhs.valueAndGradient *= -1.0f;
 
     return SmoothIntersection(lhs, rhs, smoothing);

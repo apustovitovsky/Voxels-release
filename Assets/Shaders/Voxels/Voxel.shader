@@ -62,20 +62,17 @@ Shader "Voxels/Voxel"
             {
                 float4 positionOS : POSITION;
                 float4 normalOS : NORMAL;
-                uint materialIndex : TEXCOORD0;
                 float2 lightmapUV : TEXCOORD1;
 
-                // Temporary contract:
-                // packedMaterialWeights.x stores weights0 for slots 0..3
-                // packedMaterialWeights.y stores weights1 for slots 4..7, currently ignored by the shader
-                uint2 packedMaterialWeights : TEXCOORD2;
+                // Top-4 render payload: 4 material indices + 4 quantized weights packed into uint2.
+                uint2 packedMaterialSet : TEXCOORD2;
             };
 
             #include "Assets/Compute/Include/Packing2.hlsl"
 
-            float4 UnpackMaterialWeights(uint2 packedWeights)
+            void UnpackVertexMaterial(uint2 packedMaterialSet, out uint4 materialIndices, out float4 materialWeights)
             {
-                return UnpackBytes01(packedWeights.x);
+                UnpackTop4MaterialWeights8Bit(packedMaterialSet, materialIndices, materialWeights);
             }
 
             struct GeometryPassInput
@@ -83,20 +80,20 @@ Shader "Voxels/Voxel"
                 float4 positionCS : SV_POSITION;
                 float3 positionWS : TEXCOORD0;
                 half3 normalWS : TEXCOORD1;
-                uint materialIndex : TEXCOORD2;
-                DECLARE_LIGHTMAP_OR_SH(lightmapUV, vertexSH, 3);
+                DECLARE_LIGHTMAP_OR_SH(lightmapUV, vertexSH, 2);
 
                 #if defined(_ADDITIONAL_LIGHTS_VERTEX)
-                    half4 fogFactorAndVertexLight : TEXCOORD4;
+                    half4 fogFactorAndVertexLight : TEXCOORD3;
                 #else
-                    half fogFactor : TEXCOORD4;
+                    half fogFactor : TEXCOORD3;
                 #endif
 
                 #if defined(REQUIRES_VERTEX_SHADOW_COORD_INTERPOLATOR)
-                    float4 shadowCoord : TEXCOORD5;
+                    float4 shadowCoord : TEXCOORD4;
                 #endif
 
-                // Веса, пришедшие из mesh vertex buffer.
+                // Unpacked top-4 material payload from the mesh vertex buffer.
+                nointerpolation uint4 materialIndices : TEXCOORD5;
                 half4 materialWeights : TEXCOORD6;
             };
 
@@ -107,27 +104,99 @@ Shader "Voxels/Voxel"
                 half3 normalWS : TEXCOORD1;
 
                 // Старые индексы трёх вершин треугольника.
-                uint3 materialIndices : TEXCOORD2;
 
                 // Старые barycentric-веса трёх вершин треугольника.
-                half3 triangleMaterialWeights : TEXCOORD3;
 
-                DECLARE_LIGHTMAP_OR_SH(lightmapUV, vertexSH, 4);
+                DECLARE_LIGHTMAP_OR_SH(lightmapUV, vertexSH, 2);
 
                 #if defined(_ADDITIONAL_LIGHTS_VERTEX)
-                    half4 fogFactorAndVertexLight : TEXCOORD5;
+                    half4 fogFactorAndVertexLight : TEXCOORD3;
                 #else
-                    half fogFactor : TEXCOORD5;
+                    half fogFactor : TEXCOORD3;
                 #endif
 
                 #if defined(REQUIRES_VERTEX_SHADOW_COORD_INTERPOLATOR)
-                    float4 shadowCoord : TEXCOORD6;
+                    float4 shadowCoord : TEXCOORD4;
                 #endif
 
-                // Averaged material weights for slots 0..3 only.
-                // Slots 4..7 are currently ignored in the rendering path.
-                nointerpolation half4 fixedMaterialWeights : TEXCOORD7;
+                // Triangle-constant top-4 material payload used by the fragment stage.
+                nointerpolation uint4 materialIndices : TEXCOORD5;
+                nointerpolation half4 fixedMaterialWeights : TEXCOORD6;
             };
+
+            void MergeTriangleMaterialSet(
+                triangle GeometryPassInput inputs[3],
+                out uint4 materialIndices,
+                out half4 materialWeights)
+            {
+                float materialSetWeightSums[16] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+
+                [unroll]
+                for (uint vertexIndex = 0; vertexIndex < 3; vertexIndex++)
+                {
+                    [unroll]
+                    for (uint materialIndex = 0; materialIndex < 4; materialIndex++)
+                    {
+                        materialSetWeightSums[inputs[vertexIndex].materialIndices[materialIndex]] += inputs[vertexIndex].materialWeights[materialIndex];
+                    }
+                }
+
+                materialIndices = 0;
+                float4 mergedMaterialWeights = 0.0f;
+
+                [unroll]
+                for (uint materialIndex = 0; materialIndex < 16; materialIndex++)
+                {
+                    float weight = materialSetWeightSums[materialIndex];
+
+                    if (weight > mergedMaterialWeights.x)
+                    {
+                        mergedMaterialWeights.w = mergedMaterialWeights.z;
+                        materialIndices.w = materialIndices.z;
+                        mergedMaterialWeights.z = mergedMaterialWeights.y;
+                        materialIndices.z = materialIndices.y;
+                        mergedMaterialWeights.y = mergedMaterialWeights.x;
+                        materialIndices.y = materialIndices.x;
+                        mergedMaterialWeights.x = weight;
+                        materialIndices.x = materialIndex;
+                    }
+                    else if (weight > mergedMaterialWeights.y)
+                    {
+                        mergedMaterialWeights.w = mergedMaterialWeights.z;
+                        materialIndices.w = materialIndices.z;
+                        mergedMaterialWeights.z = mergedMaterialWeights.y;
+                        materialIndices.z = materialIndices.y;
+                        mergedMaterialWeights.y = weight;
+                        materialIndices.y = materialIndex;
+                    }
+                    else if (weight > mergedMaterialWeights.z)
+                    {
+                        mergedMaterialWeights.w = mergedMaterialWeights.z;
+                        materialIndices.w = materialIndices.z;
+                        mergedMaterialWeights.z = weight;
+                        materialIndices.z = materialIndex;
+                    }
+                    else if (weight > mergedMaterialWeights.w)
+                    {
+                        mergedMaterialWeights.w = weight;
+                        materialIndices.w = materialIndex;
+                    }
+                }
+
+                float sum = mergedMaterialWeights.x + mergedMaterialWeights.y + mergedMaterialWeights.z + mergedMaterialWeights.w;
+
+                if (sum > 0.0001f)
+                {
+                    mergedMaterialWeights /= sum;
+                }
+                else
+                {
+                    materialIndices = uint4(materialIndices.x, 0, 0, 0);
+                    mergedMaterialWeights = float4(1, 0, 0, 0);
+                }
+
+                materialWeights = (half4)mergedMaterialWeights;
+            }
 
             float cosOfHalfSharpFeatureAngle;
             TEXTURE2D_ARRAY(materialAlbedoTextures);
@@ -151,9 +220,7 @@ Shader "Voxels/Voxel"
                 half fogFactor = ComputeFogFactor(positionInputs.positionCS.z);
 
                 output.normalWS = NormalizeNormalPerVertex(normalInputs.normalWS);
-                output.materialIndex = input.materialIndex;
-
-                output.materialWeights = UnpackMaterialWeights(input.packedMaterialWeights);
+                UnpackVertexMaterial(input.packedMaterialSet, output.materialIndices, output.materialWeights);
 
                 OUTPUT_LIGHTMAP_UV(input.lightmapUV, unity_LightmapST, output.lightmapUV);
                 OUTPUT_SH(output.normalWS.xyz, output.vertexSH);
@@ -174,17 +241,11 @@ Shader "Voxels/Voxel"
             [maxvertexcount(3)]
             void LitPassGeometry(triangle GeometryPassInput inputs[3], inout TriangleStream<FragmentPassInput> outputStream)
             {
-                const half3x3 half3x3Identity = half3x3
-                (
-                    1.0h, 0.0h, 0.0h,
-                    0.0h, 1.0h, 0.0h,
-                    0.0h, 0.0h, 1.0h
-                );
-
-                uint3 materialIndices = float3(inputs[0].materialIndex, inputs[1].materialIndex, inputs[2].materialIndex);
                 float3 faceNormalWS = normalize(cross(inputs[1].positionWS - inputs[0].positionWS, inputs[2].positionWS - inputs[0].positionWS));
 
-                half4 triangleFixedMaterialWeights = (inputs[0].materialWeights + inputs[1].materialWeights + inputs[2].materialWeights) / 3.0h;
+                uint4 triangleMaterialIndices;
+                half4 triangleFixedMaterialWeights;
+                MergeTriangleMaterialSet(inputs, triangleMaterialIndices, triangleFixedMaterialWeights);
 
                 for (uint index = 0; index < 3; index++)
                 {
@@ -195,9 +256,7 @@ Shader "Voxels/Voxel"
                     output.positionCS = input.positionCS;
                     output.positionWS = input.positionWS;
                     output.normalWS = input.normalWS;
-                    output.materialIndices = materialIndices;
-                    // output.materialWeights = half3x3Identity[index];
-                    output.triangleMaterialWeights = half3x3Identity[index];
+                    output.materialIndices = triangleMaterialIndices;
                     output.fixedMaterialWeights = triangleFixedMaterialWeights;
 
                     #if defined(LIGHTMAP_ON)
@@ -221,55 +280,6 @@ Shader "Voxels/Voxel"
                 outputStream.RestartStrip();
             }
 
-            float3 GetMaterialBlendWeights(FragmentPassInput input, half3 heights)
-            {
-                // float3 materialWeights = abs(input.materialWeights);
-                float3 materialWeights = abs(input.triangleMaterialWeights);
-
-                materialWeights = saturate(materialWeights - _BlendOffset);
-                materialWeights *= abs(lerp(1.0h, heights, _BlendHeightStrength));
-                materialWeights = pow(materialWeights, _BlendExponent);
-                materialWeights /= dot(materialWeights, 1.0h);
-
-                return materialWeights;
-            }
-
-            // SurfaceData CreateSurfaceData(FragmentPassInput input)
-            // {
-            //     SurfaceData surfaceData = (SurfaceData)0;
-            //     TriplanarData triplanarDatas[3];
-
-            //     for (uint index = 0; index < 3; index++)
-            //     {
-            //         triplanarDatas[index] = ApplyTriplanarTexturing
-            //         (
-            //             input.positionWS,
-            //             input.normalWS,
-            //             materialAlbedoTextures,
-            //             materialNormalTextures,
-            //             materialMOHSTextures,
-            //             sampler_linear_repeat,
-            //             input.materialIndices[index]
-            //         );
-            //     }
-
-            //     half3 heights = half3(triplanarDatas[0].height, triplanarDatas[1].height, triplanarDatas[2].height);
-            //     float3 materialWeights = GetMaterialBlendWeights(input, heights);
-
-            //     for (index = 0; index < 3; index++)
-            //     {
-            //         surfaceData.albedo += materialWeights[index] * triplanarDatas[index].albedo.rgb;
-            //         surfaceData.alpha += materialWeights[index] * triplanarDatas[index].albedo.a;
-            //         // Use SurfaceData's normalTS field to store our normalWS.
-            //         surfaceData.normalTS += materialWeights[index] * triplanarDatas[index].normalWS;
-            //         surfaceData.metallic += materialWeights[index] * triplanarDatas[index].metallic;
-            //         surfaceData.occlusion += materialWeights[index] * triplanarDatas[index].occlusion;
-            //         surfaceData.smoothness += materialWeights[index] * triplanarDatas[index].smoothness;
-            //     }
-
-            //     return surfaceData;
-            // }
-
             SurfaceData CreateSurfaceData(FragmentPassInput input)
             {
                 SurfaceData surfaceData = (SurfaceData)0;
@@ -286,55 +296,66 @@ Shader "Voxels/Voxel"
                     w = float4(1, 0, 0, 0);
                 }
 
-                // Temporary slot mapping for weights0:
-                // slot0 -> texture layer 0
-                // slot1 -> texture layer 3
-                // slot2 -> texture layer 1
-                // slot3 -> texture layer 4
+                TriplanarData slot0 = (TriplanarData)0;
+                TriplanarData slot1 = (TriplanarData)0;
+                TriplanarData slot2 = (TriplanarData)0;
+                TriplanarData slot3 = (TriplanarData)0;
 
-                TriplanarData slot0 = ApplyTriplanarTexturing
-                (
-                    input.positionWS,
-                    input.normalWS,
-                    materialAlbedoTextures,
-                    materialNormalTextures,
-                    materialMOHSTextures,
-                    sampler_linear_repeat,
-                    0
-                );
+                if (w.x > 0.0f)
+                {
+                    slot0 = ApplyTriplanarTexturing
+                    (
+                        input.positionWS,
+                        input.normalWS,
+                        materialAlbedoTextures,
+                        materialNormalTextures,
+                        materialMOHSTextures,
+                        sampler_linear_repeat,
+                        input.materialIndices.x
+                    );
+                }
 
-                TriplanarData slot1 = ApplyTriplanarTexturing
-                (
-                    input.positionWS,
-                    input.normalWS,
-                    materialAlbedoTextures,
-                    materialNormalTextures,
-                    materialMOHSTextures,
-                    sampler_linear_repeat,
-                    1
-                );
+                if (w.y > 0.0f)
+                {
+                    slot1 = ApplyTriplanarTexturing
+                    (
+                        input.positionWS,
+                        input.normalWS,
+                        materialAlbedoTextures,
+                        materialNormalTextures,
+                        materialMOHSTextures,
+                        sampler_linear_repeat,
+                        input.materialIndices.y
+                    );
+                }
 
-                TriplanarData slot2 = ApplyTriplanarTexturing
-                (
-                    input.positionWS,
-                    input.normalWS,
-                    materialAlbedoTextures,
-                    materialNormalTextures,
-                    materialMOHSTextures,
-                    sampler_linear_repeat,
-                    2
-                );
+                if (w.z > 0.0f)
+                {
+                    slot2 = ApplyTriplanarTexturing
+                    (
+                        input.positionWS,
+                        input.normalWS,
+                        materialAlbedoTextures,
+                        materialNormalTextures,
+                        materialMOHSTextures,
+                        sampler_linear_repeat,
+                        input.materialIndices.z
+                    );
+                }
 
-                TriplanarData slot3 = ApplyTriplanarTexturing
-                (
-                    input.positionWS,
-                    input.normalWS,
-                    materialAlbedoTextures,
-                    materialNormalTextures,
-                    materialMOHSTextures,
-                    sampler_linear_repeat,
-                    3
-                );
+                if (w.w > 0.0f)
+                {
+                    slot3 = ApplyTriplanarTexturing
+                    (
+                        input.positionWS,
+                        input.normalWS,
+                        materialAlbedoTextures,
+                        materialNormalTextures,
+                        materialMOHSTextures,
+                        sampler_linear_repeat,
+                        input.materialIndices.w
+                    );
+                }
 
                 surfaceData.albedo =
                     w.x * slot0.albedo.rgb +

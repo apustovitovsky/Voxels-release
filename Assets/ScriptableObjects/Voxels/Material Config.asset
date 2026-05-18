@@ -20,12 +20,12 @@ MonoBehaviour:
   - m_albedoTexture: {fileID: 2800000, guid: 4fe0b4f9dfbb59f4da9577e150cd5054, type: 3}
     m_normalTexture: {fileID: 2800000, guid: 1d2b7c5b08ce040448f07e4a2a0588e1, type: 3}
     m_mohsTexture: {fileID: 2800000, guid: 1b6253360c4e93a48ac94258da0f9e66, type: 3}
-  - m_albedoTexture: {fileID: 2800000, guid: 6f002b023bf6ce94faee9435b13bd2d9, type: 3}
+  - m_albedoTexture: {fileID: 2800000, guid: 071afe3444fc6264f9ca054b54e0c5dc, type: 3}
     m_normalTexture: {fileID: 2800000, guid: 1d2b7c5b08ce040448f07e4a2a0588e1, type: 3}
     m_mohsTexture: {fileID: 2800000, guid: 1b6253360c4e93a48ac94258da0f9e66, type: 3}
   - m_albedoTexture: {fileID: 2800000, guid: af5a0de0abcfc7142b259eeb829a73c4, type: 3}
     m_normalTexture: {fileID: 2800000, guid: 1d2b7c5b08ce040448f07e4a2a0588e1, type: 3}
     m_mohsTexture: {fileID: 2800000, guid: 1b6253360c4e93a48ac94258da0f9e66, type: 3}
-  - m_albedoTexture: {fileID: 2800000, guid: 6f002b023bf6ce94faee9435b13bd2d9, type: 3}
+  - m_albedoTexture: {fileID: 2800000, guid: 071afe3444fc6264f9ca054b54e0c5dc, type: 3}
     m_normalTexture: {fileID: 2800000, guid: 1d2b7c5b08ce040448f07e4a2a0588e1, type: 3}
     m_mohsTexture: {fileID: 2800000, guid: 1b6253360c4e93a48ac94258da0f9e66, type: 3}

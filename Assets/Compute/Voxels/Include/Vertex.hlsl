@@ -1,18 +1,13 @@
-﻿#ifndef TUNTENFISCH_VOXELS_VERTEX
+#ifndef TUNTENFISCH_VOXELS_VERTEX
 #define TUNTENFISCH_VOXELS_VERTEX
 
 #include "Assets/Compute/Include/Packing2.hlsl"
-#include "Assets/Compute/Include/MaterialWeights.hlsl"
 
 struct Vertex
 {
     float3 position;
     uint2 halfPrecisionNormal;
-    uint materialIndex;
-
-    // weights 0..3 in x
-    // weights 4..7 in y
-    uint2 packedMaterialWeights;
+    uint2 packedMaterialSet;
 
     float3 GetPosition()
     {
@@ -40,42 +35,21 @@ struct Vertex
         );
     }
 
-    uint GetMaterialIndex()
+    void GetMaterialSet(out uint4 materialSetIndices, out float4 materialSetWeights)
     {
-        return materialIndex;
+        UnpackTop4MaterialWeights8Bit(packedMaterialSet, materialSetIndices, materialSetWeights);
     }
 
-    void SetMaterialIndex(uint newMaterialIndex)
+    void SetMaterialSet(uint4 materialSetIndices, float4 materialSetWeights)
     {
-        materialIndex = newMaterialIndex;
-    }
-
-    float4 GetMaterialWeights0()
-    {
-        return UnpackBytes01(packedMaterialWeights.x);
-    }
-
-    float4 GetMaterialWeights1()
-    {
-        return UnpackBytes01(packedMaterialWeights.y);
-    }
-
-    void SetMaterialWeights(float4 weights0, float4 weights1)
-    {
-        NormalizeMaterialWeights(weights0, weights1);
-
-        packedMaterialWeights = uint2(
-            PackBytes01(weights0),
-            PackBytes01(weights1)
-        );
+        packedMaterialSet = PackTop4MaterialWeights8Bit(materialSetIndices, materialSetWeights);
     }
 
     static Vertex Create(
         float3 position = 0.0f,
         float3 normal = 0.0f,
-        uint materialIndex = 0,
-        float4 materialWeights0 = 0.0f,
-        float4 materialWeights1 = 0.0f)
+        uint4 materialSetIndices = uint4(0, 0, 0, 0),
+        float4 materialSetWeights = float4(1, 0, 0, 0))
     {
         Vertex vertex;
         vertex.position = position;
@@ -83,11 +57,11 @@ struct Vertex
             PackFloats(normal.xy),
             PackFloats(float2(normal.z, 0.0f))
         );
-        vertex.materialIndex = materialIndex;
-        vertex.SetMaterialWeights(materialWeights0, materialWeights1);
+        vertex.SetMaterialSet(materialSetIndices, materialSetWeights);
 
         return vertex;
     }
+
 };
 
 #endif

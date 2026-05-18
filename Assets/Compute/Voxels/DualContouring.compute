@@ -2,6 +2,7 @@
 #pragma kernel ApplyLevelOfDetail
 #pragma kernel GenerateOuterCellVertices
 #pragma kernel GenerateTriangles
+#pragma kernel PackRenderVertices
 
 #include "Assets/Compute/Voxels/Include/Cell.hlsl"
 #include "Assets/Compute/Voxels/Include/Vertex.hlsl"
@@ -24,27 +25,41 @@ struct CellVertexInfo
     }
 };
 
+struct GPUVertex
+{
+    float3 position;
+    uint2 halfPrecisionNormal;
+    uint2 packedMaterialSet;
+
+    static GPUVertex Create(Vertex vertex)
+    {
+        GPUVertex gpuVertex;
+        gpuVertex.position = vertex.position;
+        gpuVertex.halfPrecisionNormal = vertex.halfPrecisionNormal;
+        gpuVertex.packedMaterialSet = vertex.packedMaterialSet;
+
+        return gpuVertex;
+    }
+};
+
 struct Intersection
 {
     float3 position;
     float3 normal;
-    uint materialIndex;
-    float4 materialWeights0;
-    float4 materialWeights1;
+    uint4 materialSetIndices;
+    float4 materialSetWeights;
 
     static Intersection Create(
         float3 position = 0.0f,
         float3 normal = 0.0f,
-        uint materialIndex = 0,
-        float4 materialWeights0 = 0.0f,
-        float4 materialWeights1 = 0.0f)
+        uint4 materialSetIndices = uint4(0, 0, 0, 0),
+        float4 materialSetWeights = float4(1, 0, 0, 0))
     {
         Intersection intersection;
         intersection.position = position;
         intersection.normal = normal;
-        intersection.materialIndex = materialIndex;
-        intersection.materialWeights0 = materialWeights0;
-        intersection.materialWeights1 = materialWeights1;
+        intersection.materialSetIndices = materialSetIndices;
+        intersection.materialSetWeights = materialSetWeights;
 
         return intersection;
     }
@@ -57,6 +72,7 @@ float schmitzParticleStepSize;
 RWStructuredBuffer<CellVertexInfo> cellVertexInfoLookupTable;
 RWStructuredBuffer<Vertex> generatedVertices0;
 RWStructuredBuffer<Vertex> generatedVertices1;
+RWStructuredBuffer<GPUVertex> generatedRenderVertices;
 RWByteAddressBuffer generatedTriangles;
 
 // Theoretically we can declare below arrays locally and pass them around functions with the "out" or "inout" modifier but that will
@@ -64,8 +80,7 @@ RWByteAddressBuffer generatedTriangles;
 // https://gamedev.stackexchange.com/questions/190131/splitting-up-hlsl-code-into-separate-functions-causes-the-number-of-needed-tempo.
 static uint numberOfIntersections;
 static Intersection intersections[maxNumberOfIntersections];
-static uint numberOfMaterialIndices;
-static uint materialIndices[numberOfCellCorners];
+static float materialSetWeightSums[16];
 static float3 forces[numberOfCellCorners];
 static CellVertexInfo neighbourCellVertexInfos[3];
 
@@ -118,58 +133,85 @@ float3 CalculateForce(float3 corner)
     return force;
 }
 
-uint GetDominantMaterialIndex()
+void ResetMaterialSetWeightSums()
 {
-    const uint4x4 uint4x4Identity = uint4x4
-    (
-        1, 0, 0, 0,
-        0, 1, 0, 0,
-        0, 0, 1, 0,
-        0, 0, 0, 1
-    );
+    [unroll]
+    for (uint materialIndex = 0; materialIndex < 16; materialIndex++)
+    {
+        materialSetWeightSums[materialIndex] = 0.0f;
+    }
+}
 
-    const uint length = (numberOfMaterials + 3) / 4;
+void AccumulateMaterialSet(uint4 materialSetIndices, float4 materialSetWeights)
+{
+    [unroll]
+    for (uint index = 0; index < 4; index++)
+    {
+        materialSetWeightSums[materialSetIndices[index]] += materialSetWeights[index];
+    }
+}
 
-    // We store the counts in an uint4 array so we use up less temporary registers.
-    uint4 materialIndexOccurenceCounts[length];
+void BuildMaterialSet(out uint4 materialSetIndices, out float4 materialSetWeights)
+{
+    materialSetIndices = 0;
+    materialSetWeights = 0.0f;
 
     [unroll]
-    for (uint iterator = 0; iterator < length; iterator++)
+    for (uint materialIndex = 0; materialIndex < 16; materialIndex++)
     {
-        materialIndexOccurenceCounts[iterator] = 0;
-    }
+        float weight = materialSetWeightSums[materialIndex];
 
-    [unroll(numberOfCellCorners)]
-    for (uint index = 0; index < numberOfMaterialIndices; index++)
-    {
-        uint materialIndex = materialIndices[index];
-        materialIndexOccurenceCounts[materialIndex >> 2] += uint4x4Identity[materialIndex & 3];
-    }
-
-    uint2 dominantMaterialIndexWithCorrespondingOccurenceCount = uint2(materialIndices[0], 0);
-
-    for (index = 0; index < numberOfMaterialIndices; index++)
-    {
-        uint materialIndex = materialIndices[index];
-        uint materialIndexOccurenceCount = materialIndexOccurenceCounts[materialIndex >> 2][materialIndex & 3];
-
-        if (materialIndexOccurenceCount > dominantMaterialIndexWithCorrespondingOccurenceCount.y)
+        if (weight > materialSetWeights.x)
         {
-            dominantMaterialIndexWithCorrespondingOccurenceCount = uint2(materialIndex, materialIndexOccurenceCount);
+            materialSetWeights.w = materialSetWeights.z;
+            materialSetIndices.w = materialSetIndices.z;
+            materialSetWeights.z = materialSetWeights.y;
+            materialSetIndices.z = materialSetIndices.y;
+            materialSetWeights.y = materialSetWeights.x;
+            materialSetIndices.y = materialSetIndices.x;
+            materialSetWeights.x = weight;
+            materialSetIndices.x = materialIndex;
+        }
+        else if (weight > materialSetWeights.y)
+        {
+            materialSetWeights.w = materialSetWeights.z;
+            materialSetIndices.w = materialSetIndices.z;
+            materialSetWeights.z = materialSetWeights.y;
+            materialSetIndices.z = materialSetIndices.y;
+            materialSetWeights.y = weight;
+            materialSetIndices.y = materialIndex;
+        }
+        else if (weight > materialSetWeights.z)
+        {
+            materialSetWeights.w = materialSetWeights.z;
+            materialSetIndices.w = materialSetIndices.z;
+            materialSetWeights.z = weight;
+            materialSetIndices.z = materialIndex;
+        }
+        else if (weight > materialSetWeights.w)
+        {
+            materialSetWeights.w = weight;
+            materialSetIndices.w = materialIndex;
         }
     }
 
-    return dominantMaterialIndexWithCorrespondingOccurenceCount.x;
+    float sum = materialSetWeights.x + materialSetWeights.y + materialSetWeights.z + materialSetWeights.w;
+
+    if (sum > 0.0001f)
+    {
+        materialSetWeights /= sum;
+    }
+    else
+    {
+        materialSetIndices = uint4(materialSetIndices.x, 0, 0, 0);
+        materialSetWeights = float4(1, 0, 0, 0);
+    }
 }
 
 Vertex CalculateCenterVertex()
 {
     Vertex vertex = Vertex::Create();
-
-    numberOfMaterialIndices = 0;
-
-    float4 weights0 = 0.0f;
-    float4 weights1 = 0.0f;
+    ResetMaterialSetWeightSums();
 
     [unroll(maxNumberOfIntersections)]
     for (uint intersectionIndex = 0; intersectionIndex < numberOfIntersections; intersectionIndex++)
@@ -178,25 +220,16 @@ Vertex CalculateCenterVertex()
 
         vertex.SetPosition(vertex.GetPosition() + intersection.position);
         vertex.SetNormal(vertex.GetNormal() + intersection.normal);
-
-        weights0 += intersection.materialWeights0;
-        weights1 += intersection.materialWeights1;
-
-        materialIndices[numberOfMaterialIndices++] = intersection.materialIndex;
+        AccumulateMaterialSet(intersection.materialSetIndices, intersection.materialSetWeights);
     }
 
     vertex.SetPosition(vertex.GetPosition() / numberOfIntersections);
     vertex.SetNormal(normalize(vertex.GetNormal()));
 
-    uint dominantMaterialIndex = GetDominantMaterialIndex();
-    vertex.SetMaterialIndex(dominantMaterialIndex);
-
-    weights0 /= numberOfIntersections;
-    weights1 /= numberOfIntersections;
-
-    NormalizeMaterialWeights(weights0, weights1);
-
-    vertex.SetMaterialWeights(weights0, weights1);
+    uint4 materialSetIndices;
+    float4 materialSetWeights;
+    BuildMaterialSet(materialSetIndices, materialSetWeights);
+    vertex.SetMaterialSet(materialSetIndices, materialSetWeights);
 
     return vertex;
 }
@@ -239,26 +272,23 @@ void CalculatePositionsAndNormals(uint3 coordinate)
         }
 
         float interpolant = -sampleA.GetValue() / (sampleB.GetValue() - sampleA.GetValue());
+        Voxel surfaceSample;
 
-        float4 weights0 = lerp(
-            sampleA.GetMaterialWeights0(),
-            sampleB.GetMaterialWeights0(),
-            interpolant
-        );
-
-        float4 weights1 = lerp(
-            sampleA.GetMaterialWeights1(),
-            sampleB.GetMaterialWeights1(),
-            interpolant
-        );
+        if (!sampleA.IsSolid())
+        {
+            surfaceSample = sampleA;
+        }
+        else
+        {
+            surfaceSample = sampleB;
+        }
 
         intersections[numberOfIntersections++] = Intersection::Create
         (
             lerp(cellCornerA, cellCornerB, interpolant),
             normalize(lerp(sampleA.GetGradient(), sampleB.GetGradient(), interpolant)),
-            !sampleA.IsSolid() ? sampleA.materialIndex : sampleB.materialIndex,
-            weights0,
-            weights1
+            surfaceSample.materialSetIndices,
+            surfaceSample.materialSetWeights
         );
     }
 }
@@ -298,11 +328,7 @@ void ApplyLevelOfDetail(uint3 id : SV_DispatchThreadID)
     uint numberOfChildCellVertices = 0;
     CellVertexInfo parentCellVertexInfo = CellVertexInfo::Create();
     Vertex parentCellVertex = Vertex::Create();
-
-    numberOfMaterialIndices = 0;
-
-    float4 weights0 = 0.0f;
-    float4 weights1 = 0.0f;
+    ResetMaterialSetWeightSums();
 
     for (uint cornerIndex = 0; cornerIndex < numberOfCellCorners; cornerIndex++)
     {
@@ -315,13 +341,11 @@ void ApplyLevelOfDetail(uint3 id : SV_DispatchThreadID)
 
             parentCellVertex.SetPosition(parentCellVertex.GetPosition() + childCellVertex.GetPosition());
             parentCellVertex.SetNormal(parentCellVertex.GetNormal() + childCellVertex.GetNormal());
+            uint4 materialSetIndices;
+            float4 materialSetWeights;
+            childCellVertex.GetMaterialSet(materialSetIndices, materialSetWeights);
+            AccumulateMaterialSet(materialSetIndices, materialSetWeights);
 
-            weights0 += childCellVertex.GetMaterialWeights0();
-            weights1 += childCellVertex.GetMaterialWeights1();
-
-            materialIndices[numberOfMaterialIndices] = childCellVertex.materialIndex;
-
-            numberOfMaterialIndices++;
             numberOfChildCellVertices++;
         }
     }
@@ -330,14 +354,10 @@ void ApplyLevelOfDetail(uint3 id : SV_DispatchThreadID)
     {
         parentCellVertex.SetPosition(parentCellVertex.GetPosition() / numberOfChildCellVertices);
         parentCellVertex.SetNormal(normalize(parentCellVertex.GetNormal()));
-        parentCellVertex.SetMaterialIndex(GetDominantMaterialIndex());
-
-        weights0 /= numberOfChildCellVertices;
-        weights1 /= numberOfChildCellVertices;
-
-        NormalizeMaterialWeights(weights0, weights1);
-
-        parentCellVertex.SetMaterialWeights(weights0, weights1);
+        uint4 materialSetIndices;
+        float4 materialSetWeights;
+        BuildMaterialSet(materialSetIndices, materialSetWeights);
+        parentCellVertex.SetMaterialSet(materialSetIndices, materialSetWeights);
 
         parentCellVertexInfo.index = generatedVertices1.IncrementCounter();
         generatedVertices1[parentCellVertexInfo.index] = parentCellVertex;
@@ -441,4 +461,18 @@ void GenerateTriangles(uint3 cellID : SV_DispatchThreadID)
             GenerateTriangle(cellVertexInfo, firstNeighbourCellVertexInfo, secondNeighbourCellVertexInfo);
         }
     }
+}
+
+[numthreads(64, 1, 1)]
+void PackRenderVertices(uint3 id : SV_DispatchThreadID)
+{
+    uint vertexIndex = id.x;
+    uint vertexCount = generatedTriangles.Load(0);
+
+    if (vertexIndex >= vertexCount)
+    {
+        return;
+    }
+
+    generatedRenderVertices[vertexIndex] = GPUVertex::Create(generatedVertices0[vertexIndex]);
 }

@@ -55,12 +55,12 @@ struct GenerationGraphStack
 
     void PushValueAndGradient(float4 valueAndGradient)
     {
-        PushVoxel(Voxel::Create(valueAndGradient, 0));
+        PushVoxel(Voxel::Create(valueAndGradient));
     }
 
     void PushPosition(float3 position)
     {
-        PushVoxel(Voxel::Create(float4(0.0f, position), 0));
+        PushVoxel(Voxel::Create(float4(0.0f, position)));
     }
 
     Voxel PopVoxel()
@@ -122,18 +122,7 @@ Voxel EvaluateGenerationGraph(float3 position)
             case NodeType::Material:
             {
                 uint materialIndex = node.materialIndex;
-
-                float4 weights0 = 0.0f;
-                float4 weights1 = 0.0f;
-                CreateOneHotMaterialWeights(materialIndex, weights0, weights1);
-
-                stack.PushVoxel(Voxel::Create(
-                    stack.PopValueAndGradient(),
-                    materialIndex,
-                    weights0,
-                    weights1
-                ));
-
+                stack.PushVoxel(Voxel::Create(stack.PopValueAndGradient(), materialIndex));
                 break;
             }
 

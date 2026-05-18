@@ -7,9 +7,8 @@
 struct Voxel
 {
     float4 valueAndGradient;
-    uint materialIndex;
-    float4 materialWeights0;
-    float4 materialWeights1;
+    uint4 materialSetIndices;
+    float4 materialSetWeights;
 
     float GetValue()
     {
@@ -36,33 +35,38 @@ struct Voxel
         return valueAndGradient.x >= 0.0;
     }
 
-    float4 GetMaterialWeights0()
+    void SetMaterialSet(uint4 newMaterialIndices, float4 newMaterialWeights)
     {
-        return materialWeights0;
+        materialSetIndices = newMaterialIndices;
+        materialSetWeights = newMaterialWeights;
     }
 
-    float4 GetMaterialWeights1()
+    void SetMaterialIndex(uint materialIndex)
     {
-        return materialWeights1;
-    }
-
-    void SetMaterialWeights(float4 weights0, float4 weights1)
-    {
-        materialWeights0 = weights0;
-        materialWeights1 = weights1;
+        materialSetIndices = uint4(materialIndex & 15u, 0u, 0u, 0u);
+        materialSetWeights = float4(1.0f, 0.0f, 0.0f, 0.0f);
     }
 
     static Voxel Create(
         float4 valueAndGradient = 0.0f,
-        uint materialIndex = 0,
-        float4 materialWeights0 = 0.0f,
-        float4 materialWeights1 = 0.0f)
+        uint4 materialSetIndices = uint4(0, 0, 0, 0),
+        float4 materialSetWeights = float4(1, 0, 0, 0))
     {
         Voxel voxel;
         voxel.valueAndGradient = valueAndGradient;
-        voxel.materialIndex = materialIndex;
-        voxel.materialWeights0 = materialWeights0;
-        voxel.materialWeights1 = materialWeights1;
+        voxel.materialSetIndices = materialSetIndices;
+        voxel.materialSetWeights = materialSetWeights;
+
+        return voxel;
+    }
+
+    static Voxel Create(
+        float4 valueAndGradient,
+        uint materialIndex)
+    {
+        Voxel voxel;
+        voxel.valueAndGradient = valueAndGradient;
+        voxel.SetMaterialIndex(materialIndex);
 
         return voxel;
     }
@@ -70,19 +74,16 @@ struct Voxel
 
 struct PackedVoxel
 {
-    uint packedValueAndMaterialIndex;
-    uint packedGradient;
-    uint2 packedMaterialWeights;
+    uint2 packedValueAndGradient;
+    uint2 packedMaterialSet;
 
     static PackedVoxel Create(
-        uint packedValueAndMaterialIndex,
-        uint packedGradient,
-        uint2 packedMaterialWeights)
+        uint2 packedValueAndGradient,
+        uint2 packedMaterialSet)
     {
         PackedVoxel packedVoxel;
-        packedVoxel.packedValueAndMaterialIndex = packedValueAndMaterialIndex;
-        packedVoxel.packedGradient = packedGradient;
-        packedVoxel.packedMaterialWeights = packedMaterialWeights;
+        packedVoxel.packedValueAndGradient = packedValueAndGradient;
+        packedVoxel.packedMaterialSet = packedMaterialSet;
 
         return packedVoxel;
     }
@@ -90,35 +91,40 @@ struct PackedVoxel
 
 PackedVoxel PackVoxel(Voxel voxel)
 {
-    uint packedValueAndMaterialIndex = f32tof16(voxel.GetValue()) | voxel.materialIndex << 16;
+    uint2 packedValueAndGradient = uint2(
+        asuint(voxel.GetValue()),
+        PackFloats(PackNormalOctQuadEncode(normalize(voxel.GetGradient()))));
 
-    uint packedGradient = PackFloats(
-        PackNormalOctQuadEncode(normalize(voxel.GetGradient())));
-
-    uint2 packedWeights = uint2(
-        PackBytes01(voxel.materialWeights0),
-        PackBytes01(voxel.materialWeights1)
+    uint2 packedMaterialSet = PackTop4MaterialWeights8Bit(
+        voxel.materialSetIndices,
+        voxel.materialSetWeights
     );
 
     return PackedVoxel::Create(
-        packedValueAndMaterialIndex,
-        packedGradient,
-        packedWeights);
+        packedValueAndGradient,
+        packedMaterialSet
+    );
 }
 
 Voxel UnpackVoxel(PackedVoxel packedVoxel)
 {
-    float value = f16tof32(packedVoxel.packedValueAndMaterialIndex);
-    float3 gradient = UnpackNormalOctQuadEncode(UnpackFloats(packedVoxel.packedGradient));
-    uint materialIndex = packedVoxel.packedValueAndMaterialIndex >> 16;
-    float4 materialWeights0 = UnpackBytes01(packedVoxel.packedMaterialWeights.x);
-    float4 materialWeights1 = UnpackBytes01(packedVoxel.packedMaterialWeights.y);
+    float value = asfloat(packedVoxel.packedValueAndGradient.x);
+    float3 gradient = UnpackNormalOctQuadEncode(UnpackFloats(packedVoxel.packedValueAndGradient.y));
+
+    uint4 materialSetIndices;
+    float4 materialSetWeights;
+
+    UnpackTop4MaterialWeights8Bit(
+        packedVoxel.packedMaterialSet,
+        materialSetIndices,
+        materialSetWeights
+    );
 
     return Voxel::Create(
         float4(value, gradient),
-        materialIndex,
-        materialWeights0,
-        materialWeights1);
+        materialSetIndices,
+        materialSetWeights
+    );
 }
 
 #endif

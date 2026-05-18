@@ -153,6 +153,7 @@ namespace Tuntenfisch.Voxels.DC
             private AsyncComputeBuffer m_cellVertexInfoLookupTableBuffer;
             private AsyncComputeBuffer m_generatedVerticesBuffer0;
             private AsyncComputeBuffer m_generatedVerticesBuffer1;
+            private AsyncComputeBuffer m_generatedRenderVerticesBuffer;
             private AsyncComputeBuffer m_generatedTrianglesBuffer;
 
             public Worker(DualContouring parent)
@@ -173,22 +174,22 @@ namespace Tuntenfisch.Voxels.DC
 
             public Status Process()
             {
-                if (m_generatedVerticesBuffer0.IsDataAvailable() && m_generatedTrianglesBuffer.IsDataAvailable())
+                if (m_generatedRenderVerticesBuffer.IsDataAvailable() && m_generatedTrianglesBuffer.IsDataAvailable())
                 {
-                    int requestedVertexCount = m_generatedVerticesBuffer0.EndReadback();
+                    int requestedVertexCount = m_generatedRenderVerticesBuffer.EndReadback();
                     int requestedTriangleCount = m_generatedTrianglesBuffer.EndReadback();
 
                     VertexCount = m_generatedTriangles[0];
                     TriangleCount = 3 * m_generatedTriangles[1];
 
-                    if (requestedVertexCount < VertexCount || requestedTriangleCount < TriangleCount || m_generatedVerticesBuffer0.HasError || m_generatedTrianglesBuffer.HasError)
+                    if (requestedVertexCount < VertexCount || requestedTriangleCount < TriangleCount || m_generatedRenderVerticesBuffer.HasError || m_generatedTrianglesBuffer.HasError)
                     {
-                        if (Debug.isDebugBuild && (m_generatedVerticesBuffer0.HasError || m_generatedTrianglesBuffer.HasError))
+                        if (Debug.isDebugBuild && (m_generatedRenderVerticesBuffer.HasError || m_generatedTrianglesBuffer.HasError))
                         {
                             Debug.LogWarning("GPU readback error detected.");
                         }
                         // If we retrieved too few vertices/triangles, we need to start another readback to retrieve the correct count.
-                        m_generatedVerticesBuffer0.StartReadbackNonAlloc(ref m_generatedVertices, VertexCount);
+                        m_generatedRenderVerticesBuffer.StartReadbackNonAlloc(ref m_generatedVertices, VertexCount);
                         m_generatedTrianglesBuffer.StartReadbackNonAlloc(ref m_generatedTriangles, TriangleCount + 2);
 
                         return Status.WaitingForGPUReadback;
@@ -247,6 +248,14 @@ namespace Tuntenfisch.Voxels.DC
                 m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.GeneratedTriangles, m_generatedTrianglesBuffer);
                 m_parent.m_voxelConfig.DualContouringConfig.Compute.Dispatch(3, m_parent.m_voxelConfig.VoxelVolumeConfig.NumberOfCells - 1);
 
+                // Pack the final full-format vertices into the compact render payload consumed by the mesh and shader.
+                ComputeBuffer.CopyCount(m_generatedVerticesBuffer0, m_generatedTrianglesBuffer, 0);
+                ComputeBuffer.CopyCount(m_cellVertexInfoLookupTableBuffer, m_generatedTrianglesBuffer, sizeof(uint));
+                m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(4, ComputeShaderProperties.GeneratedVertices0, m_generatedVerticesBuffer0);
+                m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(4, ComputeShaderProperties.GeneratedRenderVertices, m_generatedRenderVerticesBuffer);
+                m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(4, ComputeShaderProperties.GeneratedTriangles, m_generatedTrianglesBuffer);
+                m_parent.m_voxelConfig.DualContouringConfig.Compute.Dispatch(4, new int3(m_generatedVertices.Length, 1, 1));
+
                 // Normally, in order to retrieve the vertices/triangles generated, you would first read the counter values of
                 // the respective compute buffers and then, in an additional readback, retrieve the vertices/triangles themselves.
                 //
@@ -268,11 +277,8 @@ namespace Tuntenfisch.Voxels.DC
                 // before and the best case is twice as good.
                 (int estimatedVertexCount, int estimatedTriangleCount) = EstimateVertexAndTriangleCounts(task);
 
-                // Copy the number of vertices/triangles generated into the start of the triangles buffer.
-                ComputeBuffer.CopyCount(m_generatedVerticesBuffer0, m_generatedTrianglesBuffer, 0);
-                ComputeBuffer.CopyCount(m_cellVertexInfoLookupTableBuffer, m_generatedTrianglesBuffer, sizeof(uint));
-                // Retrieve both the vertices and triangles buffer.
-                m_generatedVerticesBuffer0.StartReadbackNonAlloc(ref m_generatedVertices, estimatedVertexCount);
+                // Retrieve both the compact render vertices and triangles buffer.
+                m_generatedRenderVerticesBuffer.StartReadbackNonAlloc(ref m_generatedVertices, estimatedVertexCount);
                 // We're adding 2 because the vertex and triangle counts are stored in the buffer as well.
                 m_generatedTrianglesBuffer.StartReadbackNonAlloc(ref m_generatedTriangles, estimatedTriangleCount + 2);
             }
@@ -327,18 +333,24 @@ namespace Tuntenfisch.Voxels.DC
                     m_cellVertexInfoLookupTableBuffer = new AsyncComputeBuffer(m_parent.m_voxelConfig.VoxelVolumeConfig.CellCount, sizeof(uint), ComputeBufferType.Counter);
                 }
 
-                if (m_generatedVerticesBuffer0?.Count != m_generatedVertices.Length)
+                if (m_generatedVerticesBuffer0?.Count != m_generatedVertices.Length || m_generatedVerticesBuffer0?.Stride != 7 * sizeof(uint))
                 {
                     m_generatedVerticesBuffer0?.Release();
                     // The counter attached to this compute buffer stores the number of vertices generated by dual contouring.
-                    m_generatedVerticesBuffer0 = new AsyncComputeBuffer(m_generatedVertices.Length, GPUVertex.SizeInBytes, ComputeBufferType.Counter);
+                    m_generatedVerticesBuffer0 = new AsyncComputeBuffer(m_generatedVertices.Length, 7 * sizeof(uint), ComputeBufferType.Counter);
                 }
 
-                if (m_generatedVerticesBuffer1?.Count != m_generatedVertices.Length)
+                if (m_generatedVerticesBuffer1?.Count != m_generatedVertices.Length || m_generatedVerticesBuffer1?.Stride != 7 * sizeof(uint))
                 {
                     m_generatedVerticesBuffer1?.Release();
                     // The counter attached to this compute buffer stores the number of vertices generated by dual contouring.
-                    m_generatedVerticesBuffer1 = new AsyncComputeBuffer(m_generatedVertices.Length, GPUVertex.SizeInBytes, ComputeBufferType.Counter);
+                    m_generatedVerticesBuffer1 = new AsyncComputeBuffer(m_generatedVertices.Length, 7 * sizeof(uint), ComputeBufferType.Counter);
+                }
+
+                if (m_generatedRenderVerticesBuffer?.Count != m_generatedVertices.Length || m_generatedRenderVerticesBuffer?.Stride != GPUVertex.SizeInBytes)
+                {
+                    m_generatedRenderVerticesBuffer?.Release();
+                    m_generatedRenderVerticesBuffer = new AsyncComputeBuffer(m_generatedVertices.Length, GPUVertex.SizeInBytes);
                 }
 
                 if (m_generatedTrianglesBuffer?.Count != m_generatedTriangles.Length)
@@ -354,9 +366,9 @@ namespace Tuntenfisch.Voxels.DC
                 // Dispose CPU buffers.
                 if (m_generatedVertices.IsCreated)
                 {
-                    if (m_generatedVerticesBuffer0.ReadbackInProgress)
+                    if (m_generatedRenderVerticesBuffer != null && m_generatedRenderVerticesBuffer.ReadbackInProgress)
                     {
-                        m_generatedVerticesBuffer0.EndReadback();
+                        m_generatedRenderVerticesBuffer.EndReadback();
                     }
                     m_generatedVertices.Dispose();
                 }
@@ -387,6 +399,12 @@ namespace Tuntenfisch.Voxels.DC
                 {
                     m_generatedVerticesBuffer1.Release();
                     m_generatedVerticesBuffer1 = null;
+                }
+
+                if (m_generatedRenderVerticesBuffer != null)
+                {
+                    m_generatedRenderVerticesBuffer.Release();
+                    m_generatedRenderVerticesBuffer = null;
                 }
 
                 if (m_generatedTrianglesBuffer != null)
