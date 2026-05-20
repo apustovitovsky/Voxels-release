@@ -213,24 +213,15 @@ namespace Tuntenfisch.World
             m_flags |= ChunkFlags.CSGOperationPerformed | ChunkFlags.MeshRegenerationRequested;
         }
 
-        private void OnMeshGenerated(
-            NativeArray<GPUVertex> vertices,
-            int vertexCount,
-            int vertexStartIndex,
-            NativeArray<int> indices,
-            int indexCount,
-            int indexStartIndex,
-            ComputeBuffer generatedSurfaceMaterials,
-            int surfaceMaterialCount
-        )
+        private void OnMeshGenerated(MeshGenerationResult result)
         {
             m_request = null;
             m_currentLOD = m_targetLOD;
-            m_vertexCount = vertexCount;
-            m_indexCount = indexCount;
-            m_triangleCount = surfaceMaterialCount;
+            m_vertexCount = result.VertexCount;
+            m_indexCount = result.IndexCount;
+            m_triangleCount = result.TriangleCount;
 
-            if (vertexCount == 0 || indexCount == 0)
+            if (result.VertexCount == 0 || result.IndexCount == 0)
             {
                 m_meshFilter.sharedMesh = null;
                 m_meshCollider.sharedMesh = null;
@@ -239,23 +230,23 @@ namespace Tuntenfisch.World
                 return;
             }
 
-            m_mesh.SetVertexBufferParams(vertexCount, GPUVertex.Attributes);
-            m_mesh.SetIndexBufferParams(indexCount, IndexFormat.UInt32);
+            m_mesh.SetVertexBufferParams(result.VertexCount, GPUVertex.Attributes);
+            m_mesh.SetIndexBufferParams(result.IndexCount, IndexFormat.UInt32);
 #if !UNITY_EDITOR
             MeshUpdateFlags flags = MeshUpdateFlags.DontNotifyMeshUsers | MeshUpdateFlags.DontRecalculateBounds | MeshUpdateFlags.DontResetBoneBounds | MeshUpdateFlags.DontValidateIndices;
-            m_mesh.SetVertexBufferData(vertices, vertexStartIndex, 0, vertexCount, 0, flags);
-            m_mesh.SetIndexBufferData(indices, indexStartIndex, 0, indexCount, flags);
-            m_mesh.SetSubMesh(0, new SubMeshDescriptor(0, indexCount), flags);
+            m_mesh.SetVertexBufferData(result.Vertices, result.VertexStartIndex, 0, result.VertexCount, 0, flags);
+            m_mesh.SetIndexBufferData(result.Indices, result.IndexStartIndex, 0, result.IndexCount, flags);
+            m_mesh.SetSubMesh(0, new SubMeshDescriptor(0, result.IndexCount), flags);
             m_mesh.RecalculateBounds(flags);
 #else
-            m_mesh.SetVertexBufferData(vertices, vertexStartIndex, 0, vertexCount);
-            m_mesh.SetIndexBufferData(indices, indexStartIndex, 0, indexCount);
-            m_mesh.SetSubMesh(0, new SubMeshDescriptor(0, indexCount));
+            m_mesh.SetVertexBufferData(result.Vertices, result.VertexStartIndex, 0, result.VertexCount);
+            m_mesh.SetIndexBufferData(result.Indices, result.IndexStartIndex, 0, result.IndexCount);
+            m_mesh.SetSubMesh(0, new SubMeshDescriptor(0, result.IndexCount));
             m_mesh.RecalculateBounds(MeshUpdateFlags.DontValidateIndices);
 #endif
             m_meshFilter.sharedMesh = null;
             m_meshFilter.sharedMesh = m_mesh;
-            CopySurfaceMaterials(generatedSurfaceMaterials, surfaceMaterialCount);
+            CopySurfaceMaterials(result.GeneratedSurfaceMaterials, result.SurfaceMaterialCount);
 
             m_bakeJobHandle = new BakeJob(m_mesh.GetEntityId()).Schedule();
             m_flags |= ChunkFlags.IsBakingMesh;
@@ -315,6 +306,14 @@ namespace Tuntenfisch.World
             EnsureSurfaceMaterialBuffer(surfaceMaterialCount);
 
             ComputeShader copySurfaceMaterialsCompute = WorldManager.VoxelConfig.DualContouringConfig.CopySurfaceMaterialsCompute;
+
+            if (copySurfaceMaterialsCompute == null)
+            {
+                Debug.LogError("CopySurfaceMaterialsCompute is not assigned.");
+                BindSurfaceMaterialBuffer(m_emptySurfaceMaterialBuffer);
+                return;
+            }
+
             const int kernelID = 0;
 
             copySurfaceMaterialsCompute.SetBuffer(kernelID, ComputeShaderProperties.Source, generatedSurfaceMaterials);

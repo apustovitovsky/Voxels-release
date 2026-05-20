@@ -122,7 +122,7 @@ namespace Tuntenfisch.Voxels.DC
             // Only call the callback if the task hasn't been canceled.
             if (!task.Canceled)
             {
-                task.Callback(
+                MeshGenerationResult result = new(
                     worker.Vertices,
                     worker.VertexCount,
                     0,
@@ -131,6 +131,7 @@ namespace Tuntenfisch.Voxels.DC
                     2,
                     worker.GeneratedSurfaceMaterialsBuffer,
                     worker.TriangleCount);
+                task.Callback(result);
             }
             m_taskPool.Release(task);
 
