@@ -60,6 +60,7 @@ static uint numberOfIntersections;
 static Intersection intersections[maxNumberOfIntersections];
 static uint4 materialWeightScore0;
 static uint4 materialWeightScore1;
+static uint materialWeightSourceCount;
 static float3 forces[numberOfCellCorners];
 static CellVertexInfo neighbourCellVertexInfos[3];
 
@@ -116,69 +117,14 @@ void ClearMaterialWeightScores()
 {
     materialWeightScore0 = 0;
     materialWeightScore1 = 0;
+    materialWeightSourceCount = 0;
 }
 
 void AddMaterialWeightsToScores(uint2 materialWeights)
 {
-    materialWeightScore0 += UnpackBytes(materialWeights.x);
-    materialWeightScore1 += UnpackBytes(materialWeights.y);
-}
-
-uint GetDominantMaterialScoreIndex()
-{
-    uint dominantMaterialIndex = 0;
-    uint dominantScore = materialWeightScore0.x;
-
-    [unroll]
-    for (uint materialIndex = 1; materialIndex < numberOfGlobalMaterialSlots; materialIndex++)
-    {
-        uint score = materialIndex < 4
-            ? GetUint4Component(materialWeightScore0, materialIndex)
-            : GetUint4Component(materialWeightScore1, materialIndex - 4);
-
-        if (score > dominantScore)
-        {
-            dominantMaterialIndex = materialIndex;
-            dominantScore = score;
-        }
-    }
-
-    return dominantMaterialIndex;
-}
-
-uint2 NormalizeMaterialWeightScores()
-{
-    uint totalScore =
-        materialWeightScore0.x + materialWeightScore0.y +
-        materialWeightScore0.z + materialWeightScore0.w +
-        materialWeightScore1.x + materialWeightScore1.y +
-        materialWeightScore1.z + materialWeightScore1.w;
-
-    if (totalScore == 0)
-    {
-        return CreateSingleMaterialWeights(0);
-    }
-
-    uint dominantMaterialIndex = GetDominantMaterialScoreIndex();
-    uint4 normalized0 = materialWeightScore0 * 255 / totalScore;
-    uint4 normalized1 = materialWeightScore1 * 255 / totalScore;
-    uint normalizedSum =
-        normalized0.x + normalized0.y + normalized0.z + normalized0.w +
-        normalized1.x + normalized1.y + normalized1.z + normalized1.w;
-
-    uint remainder = 255 - normalizedSum;
-
-    if (dominantMaterialIndex < 4)
-    {
-        normalized0 = SetUint4Component(normalized0, dominantMaterialIndex, GetUint4Component(normalized0, dominantMaterialIndex) + remainder);
-    }
-    else
-    {
-        uint dominantMaterialIndexInHigh = dominantMaterialIndex - 4;
-        normalized1 = SetUint4Component(normalized1, dominantMaterialIndexInHigh, GetUint4Component(normalized1, dominantMaterialIndexInHigh) + remainder);
-    }
-
-    return CreateMaterialWeights(normalized0, normalized1);
+    materialWeightScore0 += UnpackMaterialWeights0(materialWeights);
+    materialWeightScore1 += UnpackMaterialWeights1(materialWeights);
+    materialWeightSourceCount++;
 }
 
 Vertex CalculateCenterVertex()
@@ -197,7 +143,7 @@ Vertex CalculateCenterVertex()
     }
     vertex.SetPosition(vertex.GetPosition() / numberOfIntersections);
     vertex.SetNormal(normalize(vertex.GetNormal()));
-    vertex.SetMaterialWeights(NormalizeMaterialWeightScores());
+    vertex.SetMaterialWeights(AverageMaterialWeightScores(materialWeightScore0, materialWeightScore1, materialWeightSourceCount));
 
     return vertex;
 }
@@ -307,7 +253,7 @@ void ApplyLevelOfDetail(uint3 id : SV_DispatchThreadID)
     {
         parentCellVertex.SetPosition(parentCellVertex.GetPosition() / numberOfChildCellVertices);
         parentCellVertex.SetNormal(normalize(parentCellVertex.GetNormal()));
-        parentCellVertex.SetMaterialWeights(NormalizeMaterialWeightScores());
+        parentCellVertex.SetMaterialWeights(AverageMaterialWeightScores(materialWeightScore0, materialWeightScore1, materialWeightSourceCount));
 
         parentCellVertexInfo.index = generatedVertices1.IncrementCounter();
         generatedVertices1[parentCellVertexInfo.index] = parentCellVertex;

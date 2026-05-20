@@ -40,16 +40,6 @@ struct Vertex
         materialWeights = newMaterialWeights;
     }
 
-    uint GetMaterialIndex()
-    {
-        return GetDominantMaterialIndex(materialWeights);
-    }
-
-    void SetMaterialIndex(uint newMaterialIndex)
-    {
-        materialWeights = CreateSingleMaterialWeights(newMaterialIndex);
-    }
-
     static Vertex Create()
     {
         return Vertex::Create(float3(0.0f, 0.0f, 0.0f), float3(0.0f, 0.0f, 0.0f), CreateSingleMaterialWeights(0));
@@ -65,10 +55,6 @@ struct Vertex
         return vertex;
     }
 
-    static Vertex Create(float3 position, float3 normal, uint materialIndex)
-    {
-        return Vertex::Create(position, normal, CreateSingleMaterialWeights(materialIndex));
-    }
 };
 
 #endif

@@ -45,11 +45,6 @@ struct Voxel
         materialWeights = newMaterialWeights;
     }
 
-    uint GetMaterialIndex()
-    {
-        return GetDominantMaterialIndex(materialWeights);
-    }
-
     static Voxel Create()
     {
         return Voxel::Create(float4(0.0f, 0.0f, 0.0f, 0.0f), CreateSingleMaterialWeights(0));

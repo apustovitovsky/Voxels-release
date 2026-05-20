@@ -51,13 +51,19 @@ Voxel Difference(Voxel lhs, Voxel rhs)
 
 Voxel SmoothUnion(Voxel lhs, Voxel rhs, float smoothing)
 {
+    if (smoothing <= 0.0001f)
+    {
+        return Union(lhs, rhs);
+    }
+
     float h = max(smoothing - abs(lhs.GetValue() - rhs.GetValue()), 0.0f);
     float m = 0.25f * h * h / smoothing;
     float n = 0.50f * h / smoothing;
+    float alpha = lhs.GetValue() < rhs.GetValue() ? n : 1.0f - n;
 
     Voxel voxel = Voxel::Create();
-    voxel.valueAndGradient = float4(min(lhs.GetValue(), rhs.GetValue()) - m, lerp(lhs.GetGradient(), rhs.GetGradient(), lhs.GetValue() < rhs.GetValue() ? n : 1.0f - n));
-    voxel.SetMaterialWeights(lhs.GetValue() < rhs.GetValue() ? lhs.GetMaterialWeights() : rhs.GetMaterialWeights());
+    voxel.valueAndGradient = float4(min(lhs.GetValue(), rhs.GetValue()) - m, lerp(lhs.GetGradient(), rhs.GetGradient(), alpha));
+    voxel.SetMaterialWeights(BlendMaterialWeights(lhs.GetMaterialWeights(), rhs.GetMaterialWeights(), alpha));
 
     return voxel;
 }

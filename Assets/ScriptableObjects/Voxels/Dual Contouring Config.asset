@@ -14,6 +14,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_compute: {fileID: 7200000, guid: 13eaeb027358e7c4da05988348d93c69, type: 3}
   m_copySurfaceMaterialsCompute: {fileID: 7200000, guid: 9ed05cf958bc4ddd93a7204d1931f631, type: 3}
-  m_schmitzParticleIterations: 15
-  m_schmitzParticleStepSize: 0
-  m_sharpFeatureAngle: 0
+  m_schmitzParticleIterations: 12
+  m_schmitzParticleStepSize: 0.111
+  m_sharpFeatureAngle: 119

@@ -13,9 +13,9 @@ namespace Tuntenfisch.Voxels.DC
         private static readonly int s_sizeInBytes = Marshal.SizeOf<GPUVertex>();
         private static readonly VertexAttributeDescriptor[] s_attributes =
         {
-            new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
-            new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float16, 4),
-            new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.UInt32, 2)
+            new(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
+            new(VertexAttribute.Normal, VertexAttributeFormat.Float16, 4),
+            new(VertexAttribute.TexCoord0, VertexAttributeFormat.UInt32, 2)
         };
 
         public readonly float3 Position => m_position;

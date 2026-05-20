@@ -245,7 +245,7 @@ namespace Tuntenfisch.World
             return VoxelConfig.VoxelVolumeConfig.VoxelVolumeDimensions / inflationFactor;
         }
 
-        private int3 CalculateChunkCoordinate(float3 position) => new int3((int)math.round(position.x / m_chunkDimensions.x), 0, (int)math.round(position.z / m_chunkDimensions.z));
+        private int3 CalculateChunkCoordinate(float3 position) => new((int)math.round(position.x / m_chunkDimensions.x), 0, (int)math.round(position.z / m_chunkDimensions.z));
 
         private float[] CalculateLodDistancesSquared()
         {

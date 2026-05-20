@@ -5,6 +5,16 @@
 
 static const uint numberOfGlobalMaterialSlots = 8;
 
+uint4 UnpackMaterialWeights0(uint2 materialWeights)
+{
+    return UnpackBytes(materialWeights.x);
+}
+
+uint4 UnpackMaterialWeights1(uint2 materialWeights)
+{
+    return UnpackBytes(materialWeights.y);
+}
+
 uint GetMaterialWeight(uint2 materialWeights, uint materialIndex)
 {
     uint packedWeights = materialIndex < 4 ? materialWeights.x : materialWeights.y;
@@ -80,36 +90,155 @@ uint PackMaterialWeights4(uint4 weights)
     return PackBytes(weights);
 }
 
-uint GetDominantMaterialIndex(uint2 materialWeights)
+uint SumMaterialWeightScores(uint4 score0, uint4 score1)
 {
-    uint dominantMaterialIndex = 0;
-    uint dominantWeight = GetMaterialWeight(materialWeights, 0);
+    return
+        score0.x + score0.y + score0.z + score0.w +
+        score1.x + score1.y + score1.z + score1.w;
+}
 
-    [unroll]
-    for (uint materialIndex = 1; materialIndex < numberOfGlobalMaterialSlots; materialIndex++)
+void CorrectMaterialWeightSum(inout uint4 weights0, inout uint4 weights1)
+{
+    uint sum = SumMaterialWeightScores(weights0, weights1);
+
+    if (sum == 255u)
     {
-        uint weight = GetMaterialWeight(materialWeights, materialIndex);
-
-        if (weight > dominantWeight)
-        {
-            dominantMaterialIndex = materialIndex;
-            dominantWeight = weight;
-        }
+        return;
     }
 
-    return dominantMaterialIndex;
+    if (sum < 255u)
+    {
+        uint deficit = 255u - sum;
+
+        if (weights0.x > 0) { weights0.x += deficit; return; }
+        if (weights0.y > 0) { weights0.y += deficit; return; }
+        if (weights0.z > 0) { weights0.z += deficit; return; }
+        if (weights0.w > 0) { weights0.w += deficit; return; }
+
+        if (weights1.x > 0) { weights1.x += deficit; return; }
+        if (weights1.y > 0) { weights1.y += deficit; return; }
+        if (weights1.z > 0) { weights1.z += deficit; return; }
+        if (weights1.w > 0) { weights1.w += deficit; return; }
+
+        weights0.x = 255u;
+
+        return;
+    }
+
+    uint excess = sum - 255u;
+
+    if (weights0.x >= excess) { weights0.x -= excess; return; }
+    if (weights0.y >= excess) { weights0.y -= excess; return; }
+    if (weights0.z >= excess) { weights0.z -= excess; return; }
+    if (weights0.w >= excess) { weights0.w -= excess; return; }
+
+    if (weights1.x >= excess) { weights1.x -= excess; return; }
+    if (weights1.y >= excess) { weights1.y -= excess; return; }
+    if (weights1.z >= excess) { weights1.z -= excess; return; }
+    if (weights1.w >= excess) { weights1.w -= excess; return; }
+
+    if (weights0.x > 0)
+    {
+        uint reduction = min(weights0.x, excess);
+        weights0.x -= reduction;
+        excess -= reduction;
+    }
+
+    if (weights0.y > 0 && excess > 0)
+    {
+        uint reduction = min(weights0.y, excess);
+        weights0.y -= reduction;
+        excess -= reduction;
+    }
+
+    if (weights0.z > 0 && excess > 0)
+    {
+        uint reduction = min(weights0.z, excess);
+        weights0.z -= reduction;
+        excess -= reduction;
+    }
+
+    if (weights0.w > 0 && excess > 0)
+    {
+        uint reduction = min(weights0.w, excess);
+        weights0.w -= reduction;
+        excess -= reduction;
+    }
+
+    if (weights1.x > 0 && excess > 0)
+    {
+        uint reduction = min(weights1.x, excess);
+        weights1.x -= reduction;
+        excess -= reduction;
+    }
+
+    if (weights1.y > 0 && excess > 0)
+    {
+        uint reduction = min(weights1.y, excess);
+        weights1.y -= reduction;
+        excess -= reduction;
+    }
+
+    if (weights1.z > 0 && excess > 0)
+    {
+        uint reduction = min(weights1.z, excess);
+        weights1.z -= reduction;
+        excess -= reduction;
+    }
+
+    if (weights1.w > 0 && excess > 0)
+    {
+        uint reduction = min(weights1.w, excess);
+        weights1.w -= reduction;
+    }
+}
+
+uint4 Div255(uint4 value)
+{
+    return (value + 128u + ((value + 128u) >> 8)) >> 8;
+}
+
+uint2 AverageMaterialWeightScores(uint4 score0, uint4 score1, uint sourceCount)
+{
+    if (sourceCount == 0)
+    {
+        return CreateSingleMaterialWeights(0);
+    }
+
+    uint4 weights0 = score0 / sourceCount;
+    uint4 weights1 = score1 / sourceCount;
+    CorrectMaterialWeightSum(weights0, weights1);
+
+    return CreateMaterialWeights(weights0, weights1);
+}
+
+uint2 BlendMaterialWeights(uint2 lhs, uint2 rhs, float alpha)
+{
+    uint alphaByte = (uint)round(saturate(alpha) * 255.0f);
+    uint invAlphaByte = 255u - alphaByte;
+
+    uint4 lhs0 = UnpackMaterialWeights0(lhs);
+    uint4 lhs1 = UnpackMaterialWeights1(lhs);
+    uint4 rhs0 = UnpackMaterialWeights0(rhs);
+    uint4 rhs1 = UnpackMaterialWeights1(rhs);
+
+    uint4 blended0 = Div255(lhs0 * invAlphaByte + rhs0 * alphaByte);
+    uint4 blended1 = Div255(lhs1 * invAlphaByte + rhs1 * alphaByte);
+    CorrectMaterialWeightSum(blended0, blended1);
+
+    return CreateMaterialWeights(blended0, blended1);
 }
 
 uint BuildTop4MaterialIndices(uint2 weights0, uint2 weights1, uint2 weights2)
 {
     uint4 score0 =
-        UnpackBytes(weights0.x) +
-        UnpackBytes(weights1.x) +
-        UnpackBytes(weights2.x);
+        UnpackMaterialWeights0(weights0) +
+        UnpackMaterialWeights0(weights1) +
+        UnpackMaterialWeights0(weights2);
     uint4 score1 =
-        UnpackBytes(weights0.y) +
-        UnpackBytes(weights1.y) +
-        UnpackBytes(weights2.y);
+        UnpackMaterialWeights1(weights0) +
+        UnpackMaterialWeights1(weights1) +
+        UnpackMaterialWeights1(weights2);
 
     uint4 top4Indices = 0;
 

@@ -62,7 +62,7 @@ Shader "Voxels/Voxel"
             {
                 float4 positionOS : POSITION;
                 float4 normalOS : NORMAL;
-                uint materialIndex : TEXCOORD0;
+                uint2 materialWeights : TEXCOORD0;
                 float2 lightmapUV : TEXCOORD1;
             };
 
@@ -102,6 +102,8 @@ Shader "Voxels/Voxel"
                 #if defined(REQUIRES_VERTEX_SHADOW_COORD_INTERPOLATOR)
                     float4 shadowCoord : TEXCOORD6;
                 #endif
+
+                nointerpolation uint activeMaterialMask : TEXCOORD7;
             };
 
             float cosOfHalfSharpFeatureAngle;
@@ -149,7 +151,21 @@ Shader "Voxels/Voxel"
             {
                 SurfaceMaterial surfaceMaterial = _SurfaceMaterials[primitiveId];
                 uint4 materialIndices = UnpackBytes(surfaceMaterial.indices);
+                half4 weights0 = UnpackWeights(surfaceMaterial.weights0);
+                half4 weights1 = UnpackWeights(surfaceMaterial.weights1);
+                half4 weights2 = UnpackWeights(surfaceMaterial.weights2);
+                uint activeMaterialMask = 0u;
                 float3 faceNormalWS = normalize(cross(inputs[1].positionWS - inputs[0].positionWS, inputs[2].positionWS - inputs[0].positionWS));
+
+                if (weights0.x > 0.0h || weights1.x > 0.0h || weights2.x > 0.0h) activeMaterialMask |= 1u;
+                if (weights0.y > 0.0h || weights1.y > 0.0h || weights2.y > 0.0h) activeMaterialMask |= 2u;
+                if (weights0.z > 0.0h || weights1.z > 0.0h || weights2.z > 0.0h) activeMaterialMask |= 4u;
+                if (weights0.w > 0.0h || weights1.w > 0.0h || weights2.w > 0.0h) activeMaterialMask |= 8u;
+
+                if (activeMaterialMask == 0u)
+                {
+                    activeMaterialMask = 1u;
+                }
 
                 for (uint index = 0; index < 3; index++)
                 {
@@ -161,9 +177,10 @@ Shader "Voxels/Voxel"
                     output.positionWS = input.positionWS;
                     output.normalWS = input.normalWS;
                     output.materialIndices = materialIndices;
-                    output.materialWeights = index == 0 ? UnpackWeights(surfaceMaterial.weights0)
-                        : index == 1 ? UnpackWeights(surfaceMaterial.weights1)
-                        : UnpackWeights(surfaceMaterial.weights2);
+                    output.materialWeights = index == 0 ? weights0
+                        : index == 1 ? weights1
+                        : weights2;
+                    output.activeMaterialMask = activeMaterialMask;
 
                     #if defined(LIGHTMAP_ON)
                         output.lightmapUV = input.lightmapUV;
@@ -204,9 +221,22 @@ Shader "Voxels/Voxel"
             {
                 SurfaceData surfaceData = (SurfaceData)0;
                 TriplanarData triplanarDatas[4];
+                uint index;
 
-                for (uint index = 0; index < 4; index++)
+                [unroll]
+                for (index = 0; index < 4; index++)
                 {
+                    triplanarDatas[index] = (TriplanarData)0;
+                }
+
+                [unroll]
+                for (index = 0; index < 4; index++)
+                {
+                    if ((input.activeMaterialMask & (1u << index)) == 0u)
+                    {
+                        continue;
+                    }
+
                     triplanarDatas[index] = ApplyTriplanarTexturing
                     (
                         input.positionWS,
@@ -222,8 +252,14 @@ Shader "Voxels/Voxel"
                 half4 heights = half4(triplanarDatas[0].height, triplanarDatas[1].height, triplanarDatas[2].height, triplanarDatas[3].height);
                 float4 materialWeights = GetMaterialBlendWeights(input, heights);
 
+                [unroll]
                 for (index = 0; index < 4; index++)
                 {
+                    if ((input.activeMaterialMask & (1u << index)) == 0u)
+                    {
+                        continue;
+                    }
+
                     surfaceData.albedo += materialWeights[index] * triplanarDatas[index].albedo.rgb;
                     surfaceData.alpha += materialWeights[index] * triplanarDatas[index].albedo.a;
                     // Use SurfaceData's normalTS field to store our normalWS.

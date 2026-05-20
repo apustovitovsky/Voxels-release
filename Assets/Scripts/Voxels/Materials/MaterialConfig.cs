@@ -50,7 +50,7 @@ namespace Tuntenfisch.Voxels.Materials
         private Texture2DArray CreateTexture2DArray(IEnumerable<Texture2D> textures)
         {
             // The dimensions should be the same across all types of textures.
-            Texture2DArray textureArray = new Texture2DArray(textures.First().width, textures.First().height, MaterialInfos.Count, textures.First().format, true);
+            Texture2DArray textureArray = new(textures.First().width, textures.First().height, MaterialInfos.Count, textures.First().format, true);
 
             foreach ((Texture2D texture, int index) iterator in textures.Select((texture, index) => (texture, index)))
             {

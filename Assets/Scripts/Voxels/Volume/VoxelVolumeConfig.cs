@@ -16,8 +16,8 @@ namespace Tuntenfisch.Voxels.Volume
         public int NumberOfCellsAlongAxis => NumberOfVoxelsAlongAxis - 1;
         public int VoxelCount => NumberOfVoxelsAlongAxis * NumberOfVoxelsAlongAxis * NumberOfVoxelsAlongAxis;
         public int CellCount => NumberOfCellsAlongAxis * NumberOfCellsAlongAxis * NumberOfCellsAlongAxis;
-        public int3 NumberOfVoxels => new int3(NumberOfVoxelsAlongAxis, NumberOfVoxelsAlongAxis, NumberOfVoxelsAlongAxis);
-        public int3 NumberOfCells => new int3(NumberOfCellsAlongAxis, NumberOfCellsAlongAxis, NumberOfCellsAlongAxis);
+        public int3 NumberOfVoxels => new(NumberOfVoxelsAlongAxis, NumberOfVoxelsAlongAxis, NumberOfVoxelsAlongAxis);
+        public int3 NumberOfCells => new(NumberOfCellsAlongAxis, NumberOfCellsAlongAxis, NumberOfCellsAlongAxis);
         public float3 VoxelVolumeDimensions => VoxelSpacing * (float3)NumberOfCells;
         public float VoxelSpacing => m_voxelSpacing;
 

@@ -32,10 +32,10 @@ namespace Tuntenfisch.Voxels.Procedural
             foreach (GenerationGraphNode node in IterateOverGraphInPreorder((GenerationGraphNode)nodes[outputNodeIndex]))
             {
                 Matrix4x4 transformMatrix = Matrix4x4.identity;
-                GPUNoiseParameters noiseParameters = new GPUNoiseParameters();
-                GPUCSGPrimitive csgPrimitive = new GPUCSGPrimitive();
+                GPUNoiseParameters noiseParameters = new();
+                GPUCSGPrimitive csgPrimitive = new();
                 MaterialIndex materialIndex = default;
-                GPUCSGOperator csgOperator = new GPUCSGOperator();
+                GPUCSGOperator csgOperator = new();
 
                 switch (node.GetNodeType())
                 {
