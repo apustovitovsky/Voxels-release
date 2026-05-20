@@ -1,23 +1,15 @@
-using System.Runtime.InteropServices;
-using Tuntenfisch.Voxels.Materials;
 using Unity.Mathematics;
 
-namespace Tuntenfisch.Voxels.DC
+namespace Tuntenfisch.Voxels.Materials
 {
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct WeightedVertex
+    public readonly struct MaterialSample
     {
-        public static int SizeInBytes => s_sizeInBytes;
+        public uint2 MaterialWeights { get; }
+        public MaterialIndex DominantMaterialIndex => (MaterialIndex)GetDominantMaterialIndex(MaterialWeights);
 
-        private static readonly int s_sizeInBytes = Marshal.SizeOf<WeightedVertex>();
-
-        public float3 Position;
-        public uint2 PackedNormal;
-        public uint2 MaterialWeights;
-
-        public GPUVertex ToGPUVertex()
+        public MaterialSample(uint2 materialWeights)
         {
-            return new GPUVertex(Position, PackedNormal, (MaterialIndex)GetDominantMaterialIndex(MaterialWeights));
+            MaterialWeights = materialWeights;
         }
 
         private static uint GetDominantMaterialIndex(uint2 materialWeights)

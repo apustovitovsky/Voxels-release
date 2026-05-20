@@ -129,9 +129,9 @@ namespace Tuntenfisch.World
             gameObject.SetActive(false);
         }
 
-        public bool GetMaterialFromRaycastHit(RaycastHit hit, out MaterialIndex materialIndex)
+        public bool TryGetMaterialSampleFromRaycastHit(RaycastHit hit, out MaterialSample sample)
         {
-            materialIndex = default;
+            sample = default;
 
             if (hit.triangleIndex >= m_triangleCount)
             {
@@ -154,12 +154,26 @@ namespace Tuntenfisch.World
                     if (distanceSquared < shortestDistanceSquared)
                     {
                         shortestDistanceSquared = distanceSquared;
-                        materialIndex = vertex.MaterialIndex;
+                        sample = new MaterialSample(vertex.MaterialWeights);
                     }
                 }
             }
 
             return true;
+        }
+
+        public bool GetMaterialFromRaycastHit(RaycastHit hit, out MaterialIndex materialIndex)
+        {
+            materialIndex = default;
+
+            if (TryGetMaterialSampleFromRaycastHit(hit, out MaterialSample sample))
+            {
+                materialIndex = sample.DominantMaterialIndex;
+
+                return true;
+            }
+
+            return false;
         }
 
         private void CreateBuffers()

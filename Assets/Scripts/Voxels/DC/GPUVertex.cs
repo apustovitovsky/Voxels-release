@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using Tuntenfisch.Voxels.Materials;
 using Unity.Mathematics;
 using UnityEngine.Rendering;
 
@@ -16,23 +15,16 @@ namespace Tuntenfisch.Voxels.DC
         {
             new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
             new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float16, 4),
-            new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.UInt32, 1)
+            new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.UInt32, 2)
         };
 
-        public float3 Position => m_position;
-        public half4 Normal => m_normal;
-        public MaterialIndex MaterialIndex => m_materialIndex;
+        public readonly float3 Position => m_position;
+        public half4 Normal => new PackedNormalUnion { Packed = m_packedNormal }.Normal;
+        public readonly uint2 MaterialWeights => m_materialWeights;
 
         private float3 m_position;
-        private half4 m_normal;
-        private readonly MaterialIndex m_materialIndex;
-
-        internal GPUVertex(float3 position, uint2 packedNormal, MaterialIndex materialIndex)
-        {
-            m_position = position;
-            m_normal = new PackedNormalUnion { Packed = packedNormal }.Normal;
-            m_materialIndex = materialIndex;
-        }
+        private uint2 m_packedNormal;
+        private uint2 m_materialWeights;
 
         [StructLayout(LayoutKind.Explicit)]
         private struct PackedNormalUnion

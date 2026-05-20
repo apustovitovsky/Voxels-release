@@ -125,9 +125,9 @@ namespace Tuntenfisch.World
             }
         }
 
-        public bool GetMaterialFromRaycastHit(RaycastHit hit, out MaterialIndex materialIndex)
+        public bool TryGetMaterialSampleFromRaycastHit(RaycastHit hit, out MaterialSample sample)
         {
-            materialIndex = default;
+            sample = default;
 
             if (!(hit.collider is MeshCollider))
             {
@@ -136,8 +136,22 @@ namespace Tuntenfisch.World
 
             int3 chunkCoordinate = CalculateChunkCoordinate(hit.point);
 
-            if (m_chunks.TryGetValue(chunkCoordinate, out Chunk chunk) && chunk.GetMaterialFromRaycastHit(hit, out materialIndex))
+            if (m_chunks.TryGetValue(chunkCoordinate, out Chunk chunk) && chunk.TryGetMaterialSampleFromRaycastHit(hit, out sample))
             {
+                return true;
+            }
+
+            return false;
+        }
+
+        public bool GetMaterialFromRaycastHit(RaycastHit hit, out MaterialIndex materialIndex)
+        {
+            materialIndex = default;
+
+            if (TryGetMaterialSampleFromRaycastHit(hit, out MaterialSample sample))
+            {
+                materialIndex = sample.DominantMaterialIndex;
+
                 return true;
             }
 
