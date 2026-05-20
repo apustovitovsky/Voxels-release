@@ -30,14 +30,14 @@ struct Intersection
 {
     float3 position;
     float3 normal;
-    uint materialIndex;
+    uint2 materialWeights;
 
-    static Intersection Create(float3 position = 0.0f, float3 normal = 0.0f, uint materialIndex = 0)
+    static Intersection Create(float3 position = 0.0f, float3 normal = 0.0f, uint2 materialWeights = uint2(255, 0))
     {
         Intersection intersection;
         intersection.position = position;
         intersection.normal = normal;
-        intersection.materialIndex = materialIndex;
+        intersection.materialWeights = materialWeights;
 
         return intersection;
     }
@@ -58,8 +58,7 @@ RWByteAddressBuffer generatedTriangles;
 // https://gamedev.stackexchange.com/questions/190131/splitting-up-hlsl-code-into-separate-functions-causes-the-number-of-needed-tempo.
 static uint numberOfIntersections;
 static Intersection intersections[maxNumberOfIntersections];
-static uint numberOfMaterialIndices;
-static uint materialIndices[numberOfCellCorners];
+static uint materialWeightScores[numberOfGlobalMaterialSlots];
 static float3 forces[numberOfCellCorners];
 static CellVertexInfo neighbourCellVertexInfos[3];
 
@@ -112,55 +111,87 @@ float3 CalculateForce(float3 corner)
     return force;
 }
 
-uint GetDominantMaterialIndex()
+void ClearMaterialWeightScores()
 {
-    const uint4x4 uint4x4Identity = uint4x4
-    (
-        1, 0, 0, 0,
-        0, 1, 0, 0,
-        0, 0, 1, 0,
-        0, 0, 0, 1
-    );
+    [unroll]
+    for (uint materialIndex = 0; materialIndex < numberOfGlobalMaterialSlots; materialIndex++)
+    {
+        materialWeightScores[materialIndex] = 0;
+    }
+}
 
-    const uint length = (numberOfMaterials + 3) / 4;
+void AddMaterialWeightsToScores(uint2 materialWeights)
+{
+    [unroll]
+    for (uint materialIndex = 0; materialIndex < numberOfGlobalMaterialSlots; materialIndex++)
+    {
+        materialWeightScores[materialIndex] += GetMaterialWeight(materialWeights, materialIndex);
+    }
+}
 
-    // We store the counts in an uint4 array so we use up less temporary registers.
-    uint4 materialIndexOccurenceCounts[length];
+uint2 NormalizeMaterialWeightScores()
+{
+    uint dominantMaterialIndex = 0;
+    uint dominantScore = materialWeightScores[0];
+    uint totalScore = dominantScore;
 
     [unroll]
-    for (uint iterator = 0; iterator < length; iterator++)
+    for (uint materialIndex = 1; materialIndex < numberOfGlobalMaterialSlots; materialIndex++)
     {
-        materialIndexOccurenceCounts[iterator] = 0;
-    }
+        uint score = materialWeightScores[materialIndex];
+        totalScore += score;
 
-    [unroll(numberOfCellCorners)]
-    for (uint index = 0; index < numberOfMaterialIndices; index++)
-    {
-        uint materialIndex = materialIndices[index];
-        materialIndexOccurenceCounts[materialIndex >> 2] += uint4x4Identity[materialIndex & 3];
-    }
-
-    uint2 dominantMaterialIndexWithCorrespondingOccurenceCount = uint2(materialIndices[0], 0);
-
-    for (index = 0; index < numberOfMaterialIndices; index++)
-    {
-        uint materialIndex = materialIndices[index];
-        uint materialIndexOccurenceCount = materialIndexOccurenceCounts[materialIndex >> 2][materialIndex & 3];
-
-        if (materialIndexOccurenceCount > dominantMaterialIndexWithCorrespondingOccurenceCount.y)
+        if (score > dominantScore)
         {
-            dominantMaterialIndexWithCorrespondingOccurenceCount = uint2(materialIndex, materialIndexOccurenceCount);
+            dominantMaterialIndex = materialIndex;
+            dominantScore = score;
         }
     }
 
-    return dominantMaterialIndexWithCorrespondingOccurenceCount.x;
+    if (totalScore == 0)
+    {
+        return CreateSingleMaterialWeights(0);
+    }
+
+    uint4 low = 0;
+    uint4 high = 0;
+    uint normalizedSum = 0;
+
+    [unroll]
+    for (uint materialIndex = 0; materialIndex < numberOfGlobalMaterialSlots; materialIndex++)
+    {
+        uint normalizedWeight = materialWeightScores[materialIndex] * 255 / totalScore;
+        normalizedSum += normalizedWeight;
+
+        if (materialIndex < 4)
+        {
+            low = SetUint4Component(low, materialIndex, normalizedWeight);
+        }
+        else
+        {
+            high = SetUint4Component(high, materialIndex - 4, normalizedWeight);
+        }
+    }
+
+    uint remainder = 255 - normalizedSum;
+
+    if (dominantMaterialIndex < 4)
+    {
+        low = SetUint4Component(low, dominantMaterialIndex, GetUint4Component(low, dominantMaterialIndex) + remainder);
+    }
+    else
+    {
+        uint dominantMaterialIndexInHigh = dominantMaterialIndex - 4;
+        high = SetUint4Component(high, dominantMaterialIndexInHigh, GetUint4Component(high, dominantMaterialIndexInHigh) + remainder);
+    }
+
+    return CreateMaterialWeights(low, high);
 }
 
 Vertex CalculateCenterVertex()
 {
     Vertex vertex = Vertex::Create();
-
-    numberOfMaterialIndices = 0;
+    ClearMaterialWeightScores();
 
     [unroll(maxNumberOfIntersections)]
     for (uint intersectionIndex = 0; intersectionIndex < numberOfIntersections; intersectionIndex++)
@@ -169,11 +200,11 @@ Vertex CalculateCenterVertex()
 
         vertex.SetPosition(vertex.GetPosition() + intersection.position);
         vertex.SetNormal(vertex.GetNormal() + intersection.normal);
-        materialIndices[numberOfMaterialIndices++] = intersection.materialIndex;
+        AddMaterialWeightsToScores(intersection.materialWeights);
     }
     vertex.SetPosition(vertex.GetPosition() / numberOfIntersections);
     vertex.SetNormal(normalize(vertex.GetNormal()));
-    vertex.SetMaterialIndex(GetDominantMaterialIndex());
+    vertex.SetMaterialWeights(NormalizeMaterialWeightScores());
 
     return vertex;
 }
@@ -221,7 +252,7 @@ void CalculatePositionsAndNormals(uint3 coordinate)
         (
             lerp(cellCornerA, cellCornerB, interpolant),
             normalize(lerp(sampleA.GetGradient(), sampleB.GetGradient(), interpolant)),
-            !sampleA.IsSolid() ? sampleA.materialIndex : sampleB.materialIndex
+            !sampleA.IsSolid() ? sampleA.GetMaterialWeights() : sampleB.GetMaterialWeights()
         );
     }
 }
@@ -261,6 +292,7 @@ void ApplyLevelOfDetail(uint3 id : SV_DispatchThreadID)
     uint numberOfChildCellVertices = 0;
     CellVertexInfo parentCellVertexInfo = CellVertexInfo::Create();
     Vertex parentCellVertex = Vertex::Create();
+    ClearMaterialWeightScores();
 
     for (uint cornerIndex = 0; cornerIndex < numberOfCellCorners; cornerIndex++)
     {
@@ -273,9 +305,7 @@ void ApplyLevelOfDetail(uint3 id : SV_DispatchThreadID)
 
             parentCellVertex.SetPosition(parentCellVertex.GetPosition() + childCellVertex.GetPosition());
             parentCellVertex.SetNormal(parentCellVertex.GetNormal() + childCellVertex.GetNormal());
-            materialIndices[numberOfMaterialIndices] = childCellVertex.materialIndex;
-
-            numberOfMaterialIndices++;
+            AddMaterialWeightsToScores(childCellVertex.GetMaterialWeights());
             numberOfChildCellVertices++;
         }
     }
@@ -284,7 +314,7 @@ void ApplyLevelOfDetail(uint3 id : SV_DispatchThreadID)
     {
         parentCellVertex.SetPosition(parentCellVertex.GetPosition() / numberOfChildCellVertices);
         parentCellVertex.SetNormal(normalize(parentCellVertex.GetNormal()));
-        parentCellVertex.SetMaterialIndex(GetDominantMaterialIndex());
+        parentCellVertex.SetMaterialWeights(NormalizeMaterialWeightScores());
 
         parentCellVertexInfo.index = generatedVertices1.IncrementCounter();
         generatedVertices1[parentCellVertexInfo.index] = parentCellVertex;
@@ -319,9 +349,9 @@ bool ArePairwiseDistinct(uint3 indices)
 
 SurfaceMaterial BuildSurfaceMaterial(Vertex firstVertex, Vertex secondVertex, Vertex thirdVertex)
 {
-    MaterialWeights8 weights0 = CreateSingleMaterialWeights(firstVertex.GetMaterialIndex());
-    MaterialWeights8 weights1 = CreateSingleMaterialWeights(secondVertex.GetMaterialIndex());
-    MaterialWeights8 weights2 = CreateSingleMaterialWeights(thirdVertex.GetMaterialIndex());
+    uint2 weights0 = firstVertex.GetMaterialWeights();
+    uint2 weights1 = secondVertex.GetMaterialWeights();
+    uint2 weights2 = thirdVertex.GetMaterialWeights();
     uint top4Indices = BuildTop4MaterialIndices(weights0, weights1, weights2);
 
     SurfaceMaterial surfaceMaterial;

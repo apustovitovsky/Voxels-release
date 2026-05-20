@@ -25,7 +25,7 @@ Voxel Union(Voxel lhs, Voxel rhs)
 {
     Voxel voxel = Voxel::Create();
     voxel.valueAndGradient = lhs.GetValue() < rhs.GetValue() ? lhs.valueAndGradient : rhs.valueAndGradient;
-    voxel.materialIndex = lhs.GetValue() < rhs.GetValue() ? lhs.materialIndex : rhs.materialIndex;
+    voxel.SetMaterialWeights(lhs.GetValue() < rhs.GetValue() ? lhs.GetMaterialWeights() : rhs.GetMaterialWeights());
 
     return voxel;
 }
@@ -43,7 +43,7 @@ Voxel Intersection(Voxel lhs, Voxel rhs)
 
 Voxel Difference(Voxel lhs, Voxel rhs)
 {
-    rhs.materialIndex = lhs.materialIndex;
+    rhs.SetMaterialWeights(lhs.GetMaterialWeights());
     rhs.valueAndGradient *= -1.0f;
 
     return Intersection(lhs, rhs);
@@ -57,7 +57,7 @@ Voxel SmoothUnion(Voxel lhs, Voxel rhs, float smoothing)
 
     Voxel voxel = Voxel::Create();
     voxel.valueAndGradient = float4(min(lhs.GetValue(), rhs.GetValue()) - m, lerp(lhs.GetGradient(), rhs.GetGradient(), lhs.GetValue() < rhs.GetValue() ? n : 1.0f - n));
-    voxel.materialIndex = lhs.GetValue() < rhs.GetValue() ? lhs.materialIndex : rhs.materialIndex;
+    voxel.SetMaterialWeights(lhs.GetValue() < rhs.GetValue() ? lhs.GetMaterialWeights() : rhs.GetMaterialWeights());
 
     return voxel;
 }
@@ -75,7 +75,7 @@ Voxel SmoothIntersection(Voxel lhs, Voxel rhs, float smoothing)
 
 Voxel SmoothDifference(Voxel lhs, Voxel rhs, float smoothing)
 {
-    rhs.materialIndex = lhs.materialIndex;
+    rhs.SetMaterialWeights(lhs.GetMaterialWeights());
     rhs.valueAndGradient *= -1.0f;
     
     return SmoothIntersection(lhs, rhs, smoothing);

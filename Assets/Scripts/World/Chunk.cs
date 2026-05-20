@@ -19,6 +19,8 @@ namespace Tuntenfisch.World
     [RequireComponent(typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider))]
     public class Chunk : MonoBehaviour, IPoolable
     {
+        private const int PackedVoxelSizeInBytes = 4 * sizeof(uint);
+
         private int m_currentLOD;
         private int m_targetLOD;
         private int m_vertexCount;
@@ -165,7 +167,7 @@ namespace Tuntenfisch.World
             if (m_voxelVolumeBuffer?.count != WorldManager.VoxelConfig.VoxelVolumeConfig.VoxelCount)
             {
                 m_voxelVolumeBuffer?.Release();
-                m_voxelVolumeBuffer = new ComputeBuffer(WorldManager.VoxelConfig.VoxelVolumeConfig.VoxelCount, 2 * sizeof(uint));
+                m_voxelVolumeBuffer = new ComputeBuffer(WorldManager.VoxelConfig.VoxelVolumeConfig.VoxelCount, PackedVoxelSizeInBytes);
             }
 
             CreateEmptySurfaceMaterialBuffer();
