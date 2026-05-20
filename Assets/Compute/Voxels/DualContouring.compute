@@ -5,6 +5,7 @@
 
 #include "Assets/Compute/Voxels/Include/Cell.hlsl"
 #include "Assets/Compute/Voxels/Include/SurfaceMaterial.hlsl"
+#include "Assets/Compute/Voxels/Include/MaterialWeights.hlsl"
 #include "Assets/Compute/Voxels/Include/Vertex.hlsl"
 #include "Assets/Compute/Voxels/Include/Voxel.hlsl"
 #include "Assets/Compute/Voxels/Include/VoxelVolume.hlsl"
@@ -318,11 +319,16 @@ bool ArePairwiseDistinct(uint3 indices)
 
 SurfaceMaterial BuildSurfaceMaterial(Vertex firstVertex, Vertex secondVertex, Vertex thirdVertex)
 {
+    MaterialWeights8 weights0 = CreateSingleMaterialWeights(firstVertex.GetMaterialIndex());
+    MaterialWeights8 weights1 = CreateSingleMaterialWeights(secondVertex.GetMaterialIndex());
+    MaterialWeights8 weights2 = CreateSingleMaterialWeights(thirdVertex.GetMaterialIndex());
+    uint top4Indices = BuildTop4MaterialIndices(weights0, weights1, weights2);
+
     SurfaceMaterial surfaceMaterial;
-    surfaceMaterial.indices = PackBytes(uint4(firstVertex.GetMaterialIndex(), secondVertex.GetMaterialIndex(), thirdVertex.GetMaterialIndex(), 0));
-    surfaceMaterial.weights0 = PackBytes(uint4(255, 0, 0, 0));
-    surfaceMaterial.weights1 = PackBytes(uint4(0, 255, 0, 0));
-    surfaceMaterial.weights2 = PackBytes(uint4(0, 0, 255, 0));
+    surfaceMaterial.indices = top4Indices;
+    surfaceMaterial.weights0 = PickWeightsForTop4(weights0, top4Indices);
+    surfaceMaterial.weights1 = PickWeightsForTop4(weights1, top4Indices);
+    surfaceMaterial.weights2 = PickWeightsForTop4(weights2, top4Indices);
 
     return surfaceMaterial;
 }
