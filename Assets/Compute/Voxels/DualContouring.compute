@@ -58,7 +58,8 @@ RWByteAddressBuffer generatedTriangles;
 // https://gamedev.stackexchange.com/questions/190131/splitting-up-hlsl-code-into-separate-functions-causes-the-number-of-needed-tempo.
 static uint numberOfIntersections;
 static Intersection intersections[maxNumberOfIntersections];
-static uint materialWeightScores[numberOfGlobalMaterialSlots];
+static uint4 materialWeightScore0;
+static uint4 materialWeightScore1;
 static float3 forces[numberOfCellCorners];
 static CellVertexInfo neighbourCellVertexInfos[3];
 
@@ -113,33 +114,27 @@ float3 CalculateForce(float3 corner)
 
 void ClearMaterialWeightScores()
 {
-    [unroll]
-    for (uint materialIndex = 0; materialIndex < numberOfGlobalMaterialSlots; materialIndex++)
-    {
-        materialWeightScores[materialIndex] = 0;
-    }
+    materialWeightScore0 = 0;
+    materialWeightScore1 = 0;
 }
 
 void AddMaterialWeightsToScores(uint2 materialWeights)
 {
-    [unroll]
-    for (uint materialIndex = 0; materialIndex < numberOfGlobalMaterialSlots; materialIndex++)
-    {
-        materialWeightScores[materialIndex] += GetMaterialWeight(materialWeights, materialIndex);
-    }
+    materialWeightScore0 += UnpackBytes(materialWeights.x);
+    materialWeightScore1 += UnpackBytes(materialWeights.y);
 }
 
-uint2 NormalizeMaterialWeightScores()
+uint GetDominantMaterialScoreIndex()
 {
     uint dominantMaterialIndex = 0;
-    uint dominantScore = materialWeightScores[0];
-    uint totalScore = dominantScore;
+    uint dominantScore = materialWeightScore0.x;
 
     [unroll]
     for (uint materialIndex = 1; materialIndex < numberOfGlobalMaterialSlots; materialIndex++)
     {
-        uint score = materialWeightScores[materialIndex];
-        totalScore += score;
+        uint score = materialIndex < 4
+            ? GetUint4Component(materialWeightScore0, materialIndex)
+            : GetUint4Component(materialWeightScore1, materialIndex - 4);
 
         if (score > dominantScore)
         {
@@ -148,44 +143,42 @@ uint2 NormalizeMaterialWeightScores()
         }
     }
 
+    return dominantMaterialIndex;
+}
+
+uint2 NormalizeMaterialWeightScores()
+{
+    uint totalScore =
+        materialWeightScore0.x + materialWeightScore0.y +
+        materialWeightScore0.z + materialWeightScore0.w +
+        materialWeightScore1.x + materialWeightScore1.y +
+        materialWeightScore1.z + materialWeightScore1.w;
+
     if (totalScore == 0)
     {
         return CreateSingleMaterialWeights(0);
     }
 
-    uint4 low = 0;
-    uint4 high = 0;
-    uint normalizedSum = 0;
-
-    [unroll]
-    for (uint materialIndex = 0; materialIndex < numberOfGlobalMaterialSlots; materialIndex++)
-    {
-        uint normalizedWeight = materialWeightScores[materialIndex] * 255 / totalScore;
-        normalizedSum += normalizedWeight;
-
-        if (materialIndex < 4)
-        {
-            low = SetUint4Component(low, materialIndex, normalizedWeight);
-        }
-        else
-        {
-            high = SetUint4Component(high, materialIndex - 4, normalizedWeight);
-        }
-    }
+    uint dominantMaterialIndex = GetDominantMaterialScoreIndex();
+    uint4 normalized0 = materialWeightScore0 * 255 / totalScore;
+    uint4 normalized1 = materialWeightScore1 * 255 / totalScore;
+    uint normalizedSum =
+        normalized0.x + normalized0.y + normalized0.z + normalized0.w +
+        normalized1.x + normalized1.y + normalized1.z + normalized1.w;
 
     uint remainder = 255 - normalizedSum;
 
     if (dominantMaterialIndex < 4)
     {
-        low = SetUint4Component(low, dominantMaterialIndex, GetUint4Component(low, dominantMaterialIndex) + remainder);
+        normalized0 = SetUint4Component(normalized0, dominantMaterialIndex, GetUint4Component(normalized0, dominantMaterialIndex) + remainder);
     }
     else
     {
         uint dominantMaterialIndexInHigh = dominantMaterialIndex - 4;
-        high = SetUint4Component(high, dominantMaterialIndexInHigh, GetUint4Component(high, dominantMaterialIndexInHigh) + remainder);
+        normalized1 = SetUint4Component(normalized1, dominantMaterialIndexInHigh, GetUint4Component(normalized1, dominantMaterialIndexInHigh) + remainder);
     }
 
-    return CreateMaterialWeights(low, high);
+    return CreateMaterialWeights(normalized0, normalized1);
 }
 
 Vertex CalculateCenterVertex()

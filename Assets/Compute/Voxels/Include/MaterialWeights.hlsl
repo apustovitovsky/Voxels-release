@@ -102,16 +102,14 @@ uint GetDominantMaterialIndex(uint2 materialWeights)
 
 uint BuildTop4MaterialIndices(uint2 weights0, uint2 weights1, uint2 weights2)
 {
-    uint scores[numberOfGlobalMaterialSlots];
-
-    [unroll]
-    for (uint materialIndex = 0; materialIndex < numberOfGlobalMaterialSlots; materialIndex++)
-    {
-        scores[materialIndex] =
-            GetMaterialWeight(weights0, materialIndex) +
-            GetMaterialWeight(weights1, materialIndex) +
-            GetMaterialWeight(weights2, materialIndex);
-    }
+    uint4 score0 =
+        UnpackBytes(weights0.x) +
+        UnpackBytes(weights1.x) +
+        UnpackBytes(weights2.x);
+    uint4 score1 =
+        UnpackBytes(weights0.y) +
+        UnpackBytes(weights1.y) +
+        UnpackBytes(weights2.y);
 
     uint4 top4Indices = 0;
 
@@ -125,7 +123,9 @@ uint BuildTop4MaterialIndices(uint2 weights0, uint2 weights1, uint2 weights2)
         [unroll]
         for (uint candidateMaterialIndex = 0; candidateMaterialIndex < numberOfGlobalMaterialSlots; candidateMaterialIndex++)
         {
-            uint score = scores[candidateMaterialIndex];
+            uint score = candidateMaterialIndex < 4
+                ? GetUint4Component(score0, candidateMaterialIndex)
+                : GetUint4Component(score1, candidateMaterialIndex - 4);
 
             if (score == 0)
             {
@@ -143,7 +143,15 @@ uint BuildTop4MaterialIndices(uint2 weights0, uint2 weights1, uint2 weights2)
         if (found)
         {
             top4Indices = SetUint4Component(top4Indices, topIndex, bestMaterialIndex);
-            scores[bestMaterialIndex] = 0;
+
+            if (bestMaterialIndex < 4)
+            {
+                score0 = SetUint4Component(score0, bestMaterialIndex, 0);
+            }
+            else
+            {
+                score1 = SetUint4Component(score1, bestMaterialIndex - 4, 0);
+            }
         }
         else
         {
