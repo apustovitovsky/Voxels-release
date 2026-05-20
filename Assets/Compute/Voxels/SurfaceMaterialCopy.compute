@@ -1,0 +1,19 @@
+#pragma kernel CopySurfaceMaterials
+
+#include "Assets/Compute/Voxels/Include/SurfaceMaterial.hlsl"
+
+StructuredBuffer<SurfaceMaterial> Source;
+RWStructuredBuffer<SurfaceMaterial> Destination;
+
+uint Count;
+
+[numthreads(64, 1, 1)]
+void CopySurfaceMaterials(uint id : SV_DispatchThreadID)
+{
+    if (id >= Count)
+    {
+        return;
+    }
+
+    Destination[id] = Source[id];
+}

@@ -4,6 +4,7 @@
 #pragma kernel GenerateTriangles
 
 #include "Assets/Compute/Voxels/Include/Cell.hlsl"
+#include "Assets/Compute/Voxels/Include/SurfaceMaterial.hlsl"
 #include "Assets/Compute/Voxels/Include/Vertex.hlsl"
 #include "Assets/Compute/Voxels/Include/Voxel.hlsl"
 #include "Assets/Compute/Voxels/Include/VoxelVolume.hlsl"
@@ -48,6 +49,7 @@ float schmitzParticleStepSize;
 RWStructuredBuffer<CellVertexInfo> cellVertexInfoLookupTable;
 RWStructuredBuffer<Vertex> generatedVertices0;
 RWStructuredBuffer<Vertex> generatedVertices1;
+RWStructuredBuffer<SurfaceMaterial> generatedSurfaceMaterials;
 RWByteAddressBuffer generatedTriangles;
 
 // Theoretically we can declare below arrays locally and pass them around functions with the "out" or "inout" modifier but that will
@@ -314,6 +316,17 @@ bool ArePairwiseDistinct(uint3 indices)
     return indices.x != indices.y && indices.x != indices.z && indices.y != indices.z;
 }
 
+SurfaceMaterial BuildSurfaceMaterial(Vertex firstVertex, Vertex secondVertex, Vertex thirdVertex)
+{
+    SurfaceMaterial surfaceMaterial;
+    surfaceMaterial.indices = PackBytes(uint4(firstVertex.GetMaterialIndex(), secondVertex.GetMaterialIndex(), thirdVertex.GetMaterialIndex(), 0));
+    surfaceMaterial.weights0 = PackBytes(uint4(255, 0, 0, 0));
+    surfaceMaterial.weights1 = PackBytes(uint4(0, 255, 0, 0));
+    surfaceMaterial.weights2 = PackBytes(uint4(0, 0, 255, 0));
+
+    return surfaceMaterial;
+}
+
 void GenerateTriangle(CellVertexInfo cellVertexInfo, CellVertexInfo firstNeighbourCellVertexInfo, CellVertexInfo secondNeighbourCellVertexInfo)
 {
     uint3 indices = uint3(cellVertexInfo.index, firstNeighbourCellVertexInfo.index, secondNeighbourCellVertexInfo.index);
@@ -325,7 +338,13 @@ void GenerateTriangle(CellVertexInfo cellVertexInfo, CellVertexInfo firstNeighbo
 
     // The first 8 bytes of the generated triangles buffer will be used to store the number of vertices/triangles
     // generated and therefore need to stay empty.
-    generatedTriangles.Store3(8 + 12 * cellVertexInfoLookupTable.IncrementCounter(), indices);
+    uint triangleId = cellVertexInfoLookupTable.IncrementCounter();
+    generatedTriangles.Store3(8 + 12 * triangleId, indices);
+    generatedSurfaceMaterials[triangleId] = BuildSurfaceMaterial(
+        generatedVertices0[cellVertexInfo.index],
+        generatedVertices0[firstNeighbourCellVertexInfo.index],
+        generatedVertices0[secondNeighbourCellVertexInfo.index]
+    );
 }
 
 void GetNeighbourCellsVertexInfos(uint3 coordinate, uint index)

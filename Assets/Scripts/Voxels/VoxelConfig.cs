@@ -29,6 +29,7 @@ namespace Tuntenfisch.Voxels
             Assert.IsNotNull(m_voxelVolumeConfig);
             Assert.IsNotNull(m_materialConfig);
             Assert.IsNotNull(m_dualContouringConfig);
+            Assert.IsNotNull(m_dualContouringConfig.CopySurfaceMaterialsCompute);
             Assert.IsNotNull(m_generationGraph);
 
             VoxelVolumeConfig.OnDirtied += ApplyVoxelVolumeConfig;

@@ -69,7 +69,7 @@ namespace Tuntenfisch.Voxels.DC
             int currentLOD,
             int targetLOD,
             int currentVertexCount,
-            int currentTriangleCount,
+            int currentIndexCount,
             float3 worldPosition,
             OnMeshGenerated callback
         )
@@ -79,7 +79,7 @@ namespace Tuntenfisch.Voxels.DC
             task.CurrentLOD = currentLOD;
             task.TargetLOD = targetLOD;
             task.CurrentVertexCount = currentVertexCount;
-            task.CurrentTriangleCount = currentTriangleCount;
+            task.CurrentIndexCount = currentIndexCount;
             task.VoxelVolumeToWorldSpaceOffset = worldPosition;
             task.Callback = callback ?? throw new ArgumentNullException(nameof(callback));
 
@@ -105,7 +105,7 @@ namespace Tuntenfisch.Voxels.DC
                 return;
             }
 
-           DispatchWorkerUniTask(task).Forget();
+            DispatchWorkerUniTask(task).Forget();
         }
 
         private async UniTaskVoid DispatchWorkerUniTask(Worker.Task task)
@@ -122,7 +122,15 @@ namespace Tuntenfisch.Voxels.DC
             // Only call the callback if the task hasn't been canceled.
             if (!task.Canceled)
             {
-                task.Callback(worker.Vertices, worker.VertexCount, 0, worker.Triangles, worker.TriangleCount, 2);
+                task.Callback(
+                    worker.Vertices,
+                    worker.VertexCount,
+                    0,
+                    worker.Indices,
+                    worker.IndexCount,
+                    2,
+                    worker.GeneratedSurfaceMaterialsBuffer,
+                    worker.TriangleCount);
             }
             m_taskPool.Release(task);
 
@@ -139,21 +147,24 @@ namespace Tuntenfisch.Voxels.DC
         private class Worker : IDisposable
         {
             public int VertexCount { get; private set; }
+            public int IndexCount { get; private set; }
             public int TriangleCount { get; private set; }
             public NativeArray<GPUVertex> Vertices => m_generatedVertices;
-            // In addition to the triangles, this native array also reads back the number of triangles and the number of vertices generated, i.e.
-            // two additional integers.
-            public NativeArray<int> Triangles => m_generatedTriangles;
+            // In addition to the indices, this native array also reads back the number of generated vertices
+            // and the number of generated triangles, i.e. two additional integers.
+            public NativeArray<int> Indices => m_generatedIndices;
+            public ComputeBuffer GeneratedSurfaceMaterialsBuffer => m_generatedSurfaceMaterialsBuffer;
 
             private DualContouring m_parent;
 
             private NativeArray<GPUVertex> m_generatedVertices;
-            private NativeArray<int> m_generatedTriangles;
+            private NativeArray<int> m_generatedIndices;
 
             private AsyncComputeBuffer m_cellVertexInfoLookupTableBuffer;
             private AsyncComputeBuffer m_generatedVerticesBuffer0;
             private AsyncComputeBuffer m_generatedVerticesBuffer1;
-            private AsyncComputeBuffer m_generatedTrianglesBuffer;
+            private AsyncComputeBuffer m_generatedSurfaceMaterialsBuffer;
+            private AsyncComputeBuffer m_generatedIndicesBuffer;
 
             public Worker(DualContouring parent)
             {
@@ -173,23 +184,24 @@ namespace Tuntenfisch.Voxels.DC
 
             public Status Process()
             {
-                if (m_generatedVerticesBuffer0.IsDataAvailable() && m_generatedTrianglesBuffer.IsDataAvailable())
+                if (m_generatedVerticesBuffer0.IsDataAvailable() && m_generatedIndicesBuffer.IsDataAvailable())
                 {
                     int requestedVertexCount = m_generatedVerticesBuffer0.EndReadback();
-                    int requestedTriangleCount = m_generatedTrianglesBuffer.EndReadback();
+                    int requestedIndexCount = m_generatedIndicesBuffer.EndReadback();
 
-                    VertexCount = m_generatedTriangles[0];
-                    TriangleCount = 3 * m_generatedTriangles[1];
+                    VertexCount = m_generatedIndices[0];
+                    TriangleCount = m_generatedIndices[1];
+                    IndexCount = 3 * TriangleCount;
 
-                    if (requestedVertexCount < VertexCount || requestedTriangleCount < TriangleCount || m_generatedVerticesBuffer0.HasError || m_generatedTrianglesBuffer.HasError)
+                    if (requestedVertexCount < VertexCount || requestedIndexCount < IndexCount || m_generatedVerticesBuffer0.HasError || m_generatedIndicesBuffer.HasError)
                     {
-                        if (Debug.isDebugBuild && (m_generatedVerticesBuffer0.HasError || m_generatedTrianglesBuffer.HasError))
+                        if (Debug.isDebugBuild && (m_generatedVerticesBuffer0.HasError || m_generatedIndicesBuffer.HasError))
                         {
                             Debug.LogWarning("GPU readback error detected.");
                         }
                         // If we retrieved too few vertices/triangles, we need to start another readback to retrieve the correct count.
                         m_generatedVerticesBuffer0.StartReadbackNonAlloc(ref m_generatedVertices, VertexCount);
-                        m_generatedTrianglesBuffer.StartReadbackNonAlloc(ref m_generatedTriangles, TriangleCount + 2);
+                        m_generatedIndicesBuffer.StartReadbackNonAlloc(ref m_generatedIndices, IndexCount + 2);
 
                         return Status.WaitingForGPUReadback;
                     }
@@ -244,7 +256,8 @@ namespace Tuntenfisch.Voxels.DC
                 m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.VoxelVolume, task.VoxelVolumeBuffer);
                 m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.CellVertexInfoLookupTable, m_cellVertexInfoLookupTableBuffer);
                 m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.GeneratedVertices0, m_generatedVerticesBuffer0);
-                m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.GeneratedTriangles, m_generatedTrianglesBuffer);
+                m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.GeneratedSurfaceMaterials, m_generatedSurfaceMaterialsBuffer);
+                m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.GeneratedTriangles, m_generatedIndicesBuffer);
                 m_parent.m_voxelConfig.DualContouringConfig.Compute.Dispatch(3, m_parent.m_voxelConfig.VoxelVolumeConfig.NumberOfCells - 1);
 
                 // Normally, in order to retrieve the vertices/triangles generated, you would first read the counter values of
@@ -253,7 +266,7 @@ namespace Tuntenfisch.Voxels.DC
                 // But this would require two readbacks and delay the updating of the mesh longer than acceptable.
                 // Instead, we copy the counter values into the beginning of the triangles buffer and then, by estimating the
                 // number of vertices/triangles we expect the compute shader to generate, retrieve the vertices/triangles.
-                // 
+                //
                 // Later on, once we receive the data from the readback, we can compare the actual number of vertices/triangles
                 // to the number of vertices/triangles we initially read based on our estimate. Two possible scenarios can occur:
                 //
@@ -261,33 +274,33 @@ namespace Tuntenfisch.Voxels.DC
                 //        Note: We don't really care if we retrieved more vertices/triangles than generated, as long as we don't
                 //              retrieve unnecessarily many too often.
                 //
-                //     2. We retrieved too few vertices/triangles. Using the actual vertex/triangle counts we need to retrieve 
+                //     2. We retrieved too few vertices/triangles. Using the actual vertex/triangle counts we need to retrieve
                 //        the vertices/triangles again using the correct counts.
                 //
                 // So, best case equals one readback, worst case equals two readbacks, i.e. the worst case is as bad as the best case
                 // before and the best case is twice as good.
-                (int estimatedVertexCount, int estimatedTriangleCount) = EstimateVertexAndTriangleCounts(task);
+                (int estimatedVertexCount, int estimatedIndexCount) = EstimateVertexAndIndexCounts(task);
 
                 // Copy the number of vertices/triangles generated into the start of the triangles buffer.
-                ComputeBuffer.CopyCount(m_generatedVerticesBuffer0, m_generatedTrianglesBuffer, 0);
-                ComputeBuffer.CopyCount(m_cellVertexInfoLookupTableBuffer, m_generatedTrianglesBuffer, sizeof(uint));
+                ComputeBuffer.CopyCount(m_generatedVerticesBuffer0, m_generatedIndicesBuffer, 0);
+                ComputeBuffer.CopyCount(m_cellVertexInfoLookupTableBuffer, m_generatedIndicesBuffer, sizeof(uint));
                 // Retrieve both the vertices and triangles buffer.
                 m_generatedVerticesBuffer0.StartReadbackNonAlloc(ref m_generatedVertices, estimatedVertexCount);
                 // We're adding 2 because the vertex and triangle counts are stored in the buffer as well.
-                m_generatedTrianglesBuffer.StartReadbackNonAlloc(ref m_generatedTriangles, estimatedTriangleCount + 2);
+                m_generatedIndicesBuffer.StartReadbackNonAlloc(ref m_generatedIndices, estimatedIndexCount + 2);
             }
 
-            private (int, int) EstimateVertexAndTriangleCounts(Task task)
+            private (int, int) EstimateVertexAndIndexCounts(Task task)
             {
                 float factor = m_parent.m_readbackInflationFactor * math.pow(2.0f, task.TargetLOD - task.CurrentLOD);
 
                 int estimatedVertexCount = (int)math.round(factor * task.CurrentVertexCount);
                 estimatedVertexCount = math.clamp(1, estimatedVertexCount, m_generatedVertices.Length);
 
-                int estimatedTriangleCount = (int)math.round(factor * task.CurrentTriangleCount);
-                estimatedTriangleCount = math.clamp(1, estimatedTriangleCount, m_generatedTriangles.Length - 2);
+                int estimatedIndexCount = (int)math.round(factor * task.CurrentIndexCount);
+                estimatedIndexCount = math.clamp(1, estimatedIndexCount, m_generatedIndices.Length - 2);
 
-                return (estimatedVertexCount, estimatedTriangleCount);
+                return (estimatedVertexCount, estimatedIndexCount);
             }
 
             private void CreateBuffers()
@@ -310,13 +323,13 @@ namespace Tuntenfisch.Voxels.DC
                 // two additional integers.
                 int generatedTrianglesCapacity = maxNumberOfTriangles + 2;
 
-                if (!m_generatedTriangles.IsCreated || m_generatedTriangles.Length != generatedTrianglesCapacity)
+                if (!m_generatedIndices.IsCreated || m_generatedIndices.Length != generatedTrianglesCapacity)
                 {
-                    if (m_generatedTriangles.IsCreated)
+                    if (m_generatedIndices.IsCreated)
                     {
-                        m_generatedTriangles.Dispose();
+                        m_generatedIndices.Dispose();
                     }
-                    m_generatedTriangles = new NativeArray<int>(generatedTrianglesCapacity, Allocator.Persistent);
+                    m_generatedIndices = new NativeArray<int>(generatedTrianglesCapacity, Allocator.Persistent);
                 }
 
                 // Create GPU buffers.
@@ -341,11 +354,17 @@ namespace Tuntenfisch.Voxels.DC
                     m_generatedVerticesBuffer1 = new AsyncComputeBuffer(m_generatedVertices.Length, GPUVertex.SizeInBytes, ComputeBufferType.Counter);
                 }
 
-                if (m_generatedTrianglesBuffer?.Count != m_generatedTriangles.Length)
+                if (m_generatedIndicesBuffer?.Count != m_generatedIndices.Length)
                 {
-                    m_generatedTrianglesBuffer?.Release();
+                    m_generatedIndicesBuffer?.Release();
                     // To copy the counter values into the triangles buffer it needs to be of type "raw".
-                    m_generatedTrianglesBuffer = new AsyncComputeBuffer(m_generatedTriangles.Length, sizeof(uint), ComputeBufferType.Raw);
+                    m_generatedIndicesBuffer = new AsyncComputeBuffer(m_generatedIndices.Length, sizeof(uint), ComputeBufferType.Raw);
+                }
+
+                if (m_generatedSurfaceMaterialsBuffer?.Count != maxNumberOfTriangles)
+                {
+                    m_generatedSurfaceMaterialsBuffer?.Release();
+                    m_generatedSurfaceMaterialsBuffer = new AsyncComputeBuffer(maxNumberOfTriangles, 4 * sizeof(uint));
                 }
             }
 
@@ -361,13 +380,13 @@ namespace Tuntenfisch.Voxels.DC
                     m_generatedVertices.Dispose();
                 }
 
-                if (m_generatedTriangles.IsCreated)
+                if (m_generatedIndices.IsCreated)
                 {
-                    if (m_generatedTrianglesBuffer.ReadbackInProgress)
+                    if (m_generatedIndicesBuffer.ReadbackInProgress)
                     {
-                        m_generatedTrianglesBuffer.EndReadback();
+                        m_generatedIndicesBuffer.EndReadback();
                     }
-                    m_generatedTriangles.Dispose();
+                    m_generatedIndices.Dispose();
                 }
 
                 // Release GPU buffers.
@@ -389,11 +408,14 @@ namespace Tuntenfisch.Voxels.DC
                     m_generatedVerticesBuffer1 = null;
                 }
 
-                if (m_generatedTrianglesBuffer != null)
+                if (m_generatedIndicesBuffer != null)
                 {
-                    m_generatedTrianglesBuffer.Release();
-                    m_generatedTrianglesBuffer = null;
+                    m_generatedIndicesBuffer.Release();
+                    m_generatedIndicesBuffer = null;
                 }
+
+                m_generatedSurfaceMaterialsBuffer?.Release();
+                m_generatedSurfaceMaterialsBuffer = null;
             }
 
             public enum Status
@@ -409,7 +431,7 @@ namespace Tuntenfisch.Voxels.DC
                 public int CurrentLOD { get; set; }
                 public int TargetLOD { get; set; }
                 public int CurrentVertexCount { get; set; }
-                public int CurrentTriangleCount { get; set; }
+                public int CurrentIndexCount { get; set; }
                 public float3 VoxelVolumeToWorldSpaceOffset { get; set; }
                 public OnMeshGenerated Callback { get; set; }
 

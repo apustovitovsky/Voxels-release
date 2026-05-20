@@ -11,12 +11,15 @@ namespace Tuntenfisch.Voxels.DC
 
         // Dual contouring properties.
         public ComputeShader Compute => m_compute;
+        public ComputeShader CopySurfaceMaterialsCompute => m_copySurfaceMaterialsCompute;
         public int SchmitzParticleIterations => m_schmitzParticleIterations;
         public float SchmitzParticleStepSize => m_schmitzParticleStepSize;
         public float SharpFeatureAngle => m_sharpFeatureAngle;
 
         [SerializeField]
         private ComputeShader m_compute;
+        [SerializeField]
+        private ComputeShader m_copySurfaceMaterialsCompute;
         [Range(0, 50)]
         [SerializeField]
         private int m_schmitzParticleIterations = 20;

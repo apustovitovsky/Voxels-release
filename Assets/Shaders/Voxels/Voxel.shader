@@ -56,6 +56,7 @@ Shader "Voxels/Voxel"
             #pragma fragment LitPassFragment
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "Assets/Compute/Voxels/Include/SurfaceMaterial.hlsl"
 
             struct VertexPassInput
             {
@@ -70,7 +71,6 @@ Shader "Voxels/Voxel"
                 float4 positionCS : SV_POSITION;
                 float3 positionWS : TEXCOORD0;
                 half3 normalWS : TEXCOORD1;
-                uint materialIndex : TEXCOORD2;
                 DECLARE_LIGHTMAP_OR_SH(lightmapUV, vertexSH, 3);
 
                 #if defined(_ADDITIONAL_LIGHTS_VERTEX)
@@ -89,8 +89,8 @@ Shader "Voxels/Voxel"
                 float4 positionCS : SV_POSITION;
                 float3 positionWS : TEXCOORD0;
                 half3 normalWS : TEXCOORD1;
-                uint3 materialIndices : TEXCOORD2;
-                half3 materialWeights : TEXCOORD3;
+                nointerpolation uint4 materialIndices : TEXCOORD2;
+                half4 materialWeights : TEXCOORD3;
                 DECLARE_LIGHTMAP_OR_SH(lightmapUV, vertexSH, 4);
 
                 #if defined(_ADDITIONAL_LIGHTS_VERTEX)
@@ -109,6 +109,7 @@ Shader "Voxels/Voxel"
             TEXTURE2D_ARRAY(materialNormalTextures);
             TEXTURE2D_ARRAY(materialMOHSTextures);
             SAMPLER(sampler_linear_repeat);
+            StructuredBuffer<SurfaceMaterial> _SurfaceMaterials;
 
             #include "Assets/Shaders/Voxels/Include/Triplanar.hlsl"
 
@@ -126,7 +127,6 @@ Shader "Voxels/Voxel"
                 half fogFactor = ComputeFogFactor(positionInputs.positionCS.z);
 
                 output.normalWS = NormalizeNormalPerVertex(normalInputs.normalWS);
-                output.materialIndex = input.materialIndex;
 
                 OUTPUT_LIGHTMAP_UV(input.lightmapUV, unity_LightmapST, output.lightmapUV);
                 OUTPUT_SH(output.normalWS.xyz, output.vertexSH);
@@ -145,16 +145,10 @@ Shader "Voxels/Voxel"
             }
 
             [maxvertexcount(3)]
-            void LitPassGeometry(triangle GeometryPassInput inputs[3], inout TriangleStream<FragmentPassInput> outputStream)
+            void LitPassGeometry(triangle GeometryPassInput inputs[3], uint primitiveId : SV_PrimitiveID, inout TriangleStream<FragmentPassInput> outputStream)
             {
-                const half3x3 half3x3Identity = half3x3
-                (
-                    1.0h, 0.0h, 0.0h,
-                    0.0h, 1.0h, 0.0h,
-                    0.0h, 0.0h, 1.0h
-                );
-
-                uint3 materialIndices = float3(inputs[0].materialIndex, inputs[1].materialIndex, inputs[2].materialIndex);
+                SurfaceMaterial surfaceMaterial = _SurfaceMaterials[primitiveId];
+                uint4 materialIndices = UnpackBytes(surfaceMaterial.indices);
                 float3 faceNormalWS = normalize(cross(inputs[1].positionWS - inputs[0].positionWS, inputs[2].positionWS - inputs[0].positionWS));
 
                 for (uint index = 0; index < 3; index++)
@@ -167,7 +161,9 @@ Shader "Voxels/Voxel"
                     output.positionWS = input.positionWS;
                     output.normalWS = input.normalWS;
                     output.materialIndices = materialIndices;
-                    output.materialWeights = half3x3Identity[index];
+                    output.materialWeights = index == 0 ? UnpackWeights(surfaceMaterial.weights0)
+                        : index == 1 ? UnpackWeights(surfaceMaterial.weights1)
+                        : UnpackWeights(surfaceMaterial.weights2);
 
                     #if defined(LIGHTMAP_ON)
                         output.lightmapUV = input.lightmapUV;
@@ -190,13 +186,16 @@ Shader "Voxels/Voxel"
                 outputStream.RestartStrip();
             }
 
-            float3 GetMaterialBlendWeights(FragmentPassInput input, half3 heights)
+            float4 GetMaterialBlendWeights(FragmentPassInput input, half4 heights)
             {
-                float3 materialWeights = abs(input.materialWeights);
+                float4 materialWeights = abs(input.materialWeights);
                 materialWeights = saturate(materialWeights - _BlendOffset);
                 materialWeights *= abs(lerp(1.0h, heights, _BlendHeightStrength));
                 materialWeights = pow(materialWeights, _BlendExponent);
-                materialWeights /= dot(materialWeights, 1.0h);
+                float sum = dot(materialWeights, 1.0h);
+                materialWeights = sum > 0.0f
+                    ? materialWeights / sum
+                    : float4(1.0f, 0.0f, 0.0f, 0.0f);
 
                 return materialWeights;
             }
@@ -204,9 +203,9 @@ Shader "Voxels/Voxel"
             SurfaceData CreateSurfaceData(FragmentPassInput input)
             {
                 SurfaceData surfaceData = (SurfaceData)0;
-                TriplanarData triplanarDatas[3];
+                TriplanarData triplanarDatas[4];
 
-                for (uint index = 0; index < 3; index++)
+                for (uint index = 0; index < 4; index++)
                 {
                     triplanarDatas[index] = ApplyTriplanarTexturing
                     (
@@ -220,10 +219,10 @@ Shader "Voxels/Voxel"
                     );
                 }
 
-                half3 heights = half3(triplanarDatas[0].height, triplanarDatas[1].height, triplanarDatas[2].height);
-                float3 materialWeights = GetMaterialBlendWeights(input, heights);
+                half4 heights = half4(triplanarDatas[0].height, triplanarDatas[1].height, triplanarDatas[2].height, triplanarDatas[3].height);
+                float4 materialWeights = GetMaterialBlendWeights(input, heights);
 
-                for (index = 0; index < 3; index++)
+                for (index = 0; index < 4; index++)
                 {
                     surfaceData.albedo += materialWeights[index] * triplanarDatas[index].albedo.rgb;
                     surfaceData.alpha += materialWeights[index] * triplanarDatas[index].albedo.a;
