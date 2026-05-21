@@ -20,6 +20,40 @@ struct TriplanarUVs
     float2 z;
 };
 
+uint HashUInt(uint n)
+{
+    n ^= n >> 16;
+    n *= 0x7feb352du;
+    n ^= n >> 15;
+    n *= 0x846ca68bu;
+    n ^= n >> 16;
+
+    return n;
+}
+
+float Hash01(uint n)
+{
+    return (HashUInt(n) & 0x00FFFFFFu) / 16777215.0f;
+}
+
+float Hash21(uint2 n)
+{
+    return Hash01(n.x * 0x9E3779B9u ^ n.y * 0x85EBCA6Bu);
+}
+
+float2 GetPlanarHashOffset(float2 uv)
+{
+    float2 cell = floor(uv * _TextureCellFrequency);
+    int2 signedCell = int2(cell);
+    uint2 cellKey = asuint(signedCell);
+
+    return float2
+    (
+        Hash21(cellKey ^ uint2(0x68E31DA4u, 0xB5297A4Du)),
+        Hash21(cellKey ^ uint2(0x1B56C4E9u, 0x94D049BBu))
+    ) * 2.0f - 1.0f;
+}
+
 TriplanarUVs GetTriplanarUVs(float3 positionWS, half3 normalWS)
 {
     TriplanarUVs uvs;
@@ -29,6 +63,10 @@ TriplanarUVs GetTriplanarUVs(float3 positionWS, half3 normalWS)
     uvs.x = positionWS.zy;
     uvs.y = positionWS.xz;
     uvs.z = positionWS.xy;
+
+    uvs.x += GetPlanarHashOffset(uvs.x) * _TextureCellOffsetStrength;
+    uvs.y += GetPlanarHashOffset(uvs.y) * _TextureCellOffsetStrength;
+    uvs.z += GetPlanarHashOffset(uvs.z) * _TextureCellOffsetStrength;
 
     half3 signs = sign(normalWS);
 

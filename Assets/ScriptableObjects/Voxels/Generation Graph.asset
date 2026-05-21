@@ -1092,7 +1092,7 @@ MonoBehaviour:
     m_materialIndex: 0
     m_csgOperator:
       m_operatorIndex: 4
-      m_smoothing: 5
+      m_smoothing: 25
   - m_nodeType: 7
     m_transformMatrix:
       e00: 1

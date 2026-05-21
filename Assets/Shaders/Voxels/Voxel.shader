@@ -3,6 +3,8 @@ Shader "Voxels/Voxel"
     Properties
     {
         _CoordinateScaling ("Coordinate Scaling", Float) = 0.15
+        _TextureCellFrequency ("Texture Cell Frequency", Float) = 0.25
+        _TextureCellOffsetStrength ("Texture Cell Offset Strength", Float) = 0.35
         _BlendOffset ("Blend Offset", Range(0, 0.33)) = 0.2
         _BlendExponent ("Blend Exponent", Range(0.0, 8.0)) = 2.0
         _BlendHeightStrength ("Blend Height Strength", Range(0.01, 0.99)) = 0.5
@@ -17,6 +19,8 @@ Shader "Voxels/Voxel"
 
         CBUFFER_START(UnityPerMaterial)
         half _CoordinateScaling;
+        half _TextureCellFrequency;
+        half _TextureCellOffsetStrength;
         half _BlendOffset;
         half _BlendExponent;
         half _BlendHeightStrength;
@@ -363,7 +367,7 @@ Shader "Voxels/Voxel"
             #pragma fragment DepthNormalsFragment
 
             #include "Assets/Shaders/Voxels/Include/DepthNormalsPass.hlsl"
-            
+
             ENDHLSL
 
         }
