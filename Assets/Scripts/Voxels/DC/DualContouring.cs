@@ -129,7 +129,7 @@ namespace Tuntenfisch.Voxels.DC
                     worker.Indices,
                     worker.IndexCount,
                     2,
-                    worker.GeneratedSurfaceMaterialsBuffer,
+                    worker.GeneratedTriangleMaterialSetsBuffer,
                     worker.TriangleCount);
                 task.Callback(result);
             }
@@ -154,7 +154,7 @@ namespace Tuntenfisch.Voxels.DC
             // In addition to the indices, this native array also reads back the number of generated vertices
             // and the number of generated triangles, i.e. two additional integers.
             public NativeArray<int> Indices => m_generatedIndices;
-            public ComputeBuffer GeneratedSurfaceMaterialsBuffer => m_generatedSurfaceMaterialsBuffer;
+            public ComputeBuffer GeneratedTriangleMaterialSetsBuffer => m_generatedTriangleMaterialSetsBuffer;
 
             private DualContouring m_parent;
 
@@ -164,7 +164,7 @@ namespace Tuntenfisch.Voxels.DC
             private AsyncComputeBuffer m_cellVertexInfoLookupTableBuffer;
             private AsyncComputeBuffer m_generatedVerticesBuffer0;
             private AsyncComputeBuffer m_generatedVerticesBuffer1;
-            private AsyncComputeBuffer m_generatedSurfaceMaterialsBuffer;
+            private AsyncComputeBuffer m_generatedTriangleMaterialSetsBuffer;
             private AsyncComputeBuffer m_generatedIndicesBuffer;
 
             public Worker(DualContouring parent)
@@ -257,7 +257,7 @@ namespace Tuntenfisch.Voxels.DC
                 m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.VoxelVolume, task.VoxelVolumeBuffer);
                 m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.CellVertexInfoLookupTable, m_cellVertexInfoLookupTableBuffer);
                 m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.GeneratedVertices0, m_generatedVerticesBuffer0);
-                m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.GeneratedSurfaceMaterials, m_generatedSurfaceMaterialsBuffer);
+                m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.GeneratedTriangleMaterialSets, m_generatedTriangleMaterialSetsBuffer);
                 m_parent.m_voxelConfig.DualContouringConfig.Compute.SetBuffer(3, ComputeShaderProperties.GeneratedTriangles, m_generatedIndicesBuffer);
                 m_parent.m_voxelConfig.DualContouringConfig.Compute.Dispatch(3, m_parent.m_voxelConfig.VoxelVolumeConfig.NumberOfCells - 1);
 
@@ -362,10 +362,10 @@ namespace Tuntenfisch.Voxels.DC
                     m_generatedIndicesBuffer = new AsyncComputeBuffer(m_generatedIndices.Length, sizeof(uint), ComputeBufferType.Raw);
                 }
 
-                if (m_generatedSurfaceMaterialsBuffer?.Count != maxNumberOfTriangles)
+                if (m_generatedTriangleMaterialSetsBuffer?.Count != maxNumberOfTriangles)
                 {
-                    m_generatedSurfaceMaterialsBuffer?.Release();
-                    m_generatedSurfaceMaterialsBuffer = new AsyncComputeBuffer(maxNumberOfTriangles, 4 * sizeof(uint));
+                    m_generatedTriangleMaterialSetsBuffer?.Release();
+                    m_generatedTriangleMaterialSetsBuffer = new AsyncComputeBuffer(maxNumberOfTriangles, 4 * sizeof(uint));
                 }
             }
 
@@ -415,8 +415,8 @@ namespace Tuntenfisch.Voxels.DC
                     m_generatedIndicesBuffer = null;
                 }
 
-                m_generatedSurfaceMaterialsBuffer?.Release();
-                m_generatedSurfaceMaterialsBuffer = null;
+                m_generatedTriangleMaterialSetsBuffer?.Release();
+                m_generatedTriangleMaterialSetsBuffer = null;
             }
 
             public enum Status

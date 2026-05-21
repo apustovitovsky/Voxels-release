@@ -60,7 +60,7 @@ Shader "Voxels/Voxel"
             #pragma fragment LitPassFragment
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
-            #include "Assets/Compute/Voxels/Include/SurfaceMaterial.hlsl"
+            #include "Assets/Compute/Voxels/Include/TriangleMaterialSet.hlsl"
 
             struct VertexPassInput
             {
@@ -106,8 +106,6 @@ Shader "Voxels/Voxel"
                 #if defined(REQUIRES_VERTEX_SHADOW_COORD_INTERPOLATOR)
                     float4 shadowCoord : TEXCOORD6;
                 #endif
-
-                nointerpolation uint activeMaterialMask : TEXCOORD7;
             };
 
             float cosOfHalfSharpFeatureAngle;
@@ -115,7 +113,8 @@ Shader "Voxels/Voxel"
             TEXTURE2D_ARRAY(materialNormalTextures);
             TEXTURE2D_ARRAY(materialMOHSTextures);
             SAMPLER(sampler_linear_repeat);
-            StructuredBuffer<SurfaceMaterial> _SurfaceMaterials;
+            StructuredBuffer<TriangleMaterialSet> _TriangleMaterialSets;
+            static const uint invalidMaterialId = 0xFFu;
 
             #include "Assets/Shaders/Voxels/Include/Triplanar.hlsl"
 
@@ -153,23 +152,13 @@ Shader "Voxels/Voxel"
             [maxvertexcount(3)]
             void LitPassGeometry(triangle GeometryPassInput inputs[3], uint primitiveId : SV_PrimitiveID, inout TriangleStream<FragmentPassInput> outputStream)
             {
-                SurfaceMaterial surfaceMaterial = _SurfaceMaterials[primitiveId];
-                uint4 materialIndices = UnpackBytes(surfaceMaterial.indices);
-                half4 weights0 = UnpackWeights(surfaceMaterial.weights0);
-                half4 weights1 = UnpackWeights(surfaceMaterial.weights1);
-                half4 weights2 = UnpackWeights(surfaceMaterial.weights2);
-                uint activeMaterialMask = 0u;
+                TriangleMaterialSet triangleMaterialSet = _TriangleMaterialSets[primitiveId];
+                uint4 materialIndices = UnpackBytes(triangleMaterialSet.indices);
+                half4 weights0 = UnpackWeights(triangleMaterialSet.weights.x);
+                half4 weights1 = UnpackWeights(triangleMaterialSet.weights.y);
+                half4 weights2 = UnpackWeights(triangleMaterialSet.weights.z);
+
                 float3 faceNormalWS = normalize(cross(inputs[1].positionWS - inputs[0].positionWS, inputs[2].positionWS - inputs[0].positionWS));
-
-                if (weights0.x > 0.0h || weights1.x > 0.0h || weights2.x > 0.0h) activeMaterialMask |= 1u;
-                if (weights0.y > 0.0h || weights1.y > 0.0h || weights2.y > 0.0h) activeMaterialMask |= 2u;
-                if (weights0.z > 0.0h || weights1.z > 0.0h || weights2.z > 0.0h) activeMaterialMask |= 4u;
-                if (weights0.w > 0.0h || weights1.w > 0.0h || weights2.w > 0.0h) activeMaterialMask |= 8u;
-
-                if (activeMaterialMask == 0u)
-                {
-                    activeMaterialMask = 1u;
-                }
 
                 for (uint index = 0; index < 3; index++)
                 {
@@ -184,7 +173,6 @@ Shader "Voxels/Voxel"
                     output.materialWeights = index == 0 ? weights0
                         : index == 1 ? weights1
                         : weights2;
-                    output.activeMaterialMask = activeMaterialMask;
 
                     #if defined(LIGHTMAP_ON)
                         output.lightmapUV = input.lightmapUV;
@@ -236,7 +224,7 @@ Shader "Voxels/Voxel"
                 [unroll]
                 for (index = 0; index < 4; index++)
                 {
-                    if ((input.activeMaterialMask & (1u << index)) == 0u)
+                    if (input.materialIndices[index] == invalidMaterialId)
                     {
                         continue;
                     }
@@ -259,7 +247,7 @@ Shader "Voxels/Voxel"
                 [unroll]
                 for (index = 0; index < 4; index++)
                 {
-                    if ((input.activeMaterialMask & (1u << index)) == 0u)
+                    if (input.materialIndices[index] == invalidMaterialId)
                     {
                         continue;
                     }

@@ -306,8 +306,8 @@ Material:
     - _StencilWriteMask: 255
     - _Strength: 0.2
     - _Surface: 0
-    - _TextureCellFrequency: 2
-    - _TextureCellOffsetStrength: 1
+    - _TextureCellFrequency: 0.5
+    - _TextureCellOffsetStrength: 0.5
     - _TextureScaling: -0.17
     - _TriplanarBlendExponent: 0.63
     - _TriplanarBlendHeightStrength: 0.99

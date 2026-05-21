@@ -33,8 +33,8 @@ namespace Tuntenfisch.World
         private MaterialPropertyBlock m_materialPropertyBlock;
         private OnMeshGenerated m_onMeshGeneratedDelegate;
 
-        private ComputeBuffer m_surfaceMaterialBuffer;
-        private ComputeBuffer m_emptySurfaceMaterialBuffer;
+        private ComputeBuffer m_triangleMaterialSetBuffer;
+        private ComputeBuffer m_emptyTriangleMaterialSetBuffer;
         private ComputeBuffer m_voxelVolumeBuffer;
         private IRequest m_request;
         private JobHandle m_bakeJobHandle;
@@ -114,7 +114,7 @@ namespace Tuntenfisch.World
             }
 
             CreateBuffers();
-            BindSurfaceMaterialBuffer(m_emptySurfaceMaterialBuffer);
+            BindTriangleMaterialSetBuffer(m_emptyTriangleMaterialSetBuffer);
             gameObject.SetActive(true);
         }
 
@@ -184,7 +184,7 @@ namespace Tuntenfisch.World
                 m_voxelVolumeBuffer = new ComputeBuffer(WorldManager.VoxelConfig.VoxelVolumeConfig.VoxelCount, PackedVoxelSizeInBytes);
             }
 
-            CreateEmptySurfaceMaterialBuffer();
+            CreateEmptyTriangleMaterialSetBuffer();
         }
 
         private void ReleaseBuffers()
@@ -195,16 +195,16 @@ namespace Tuntenfisch.World
                 m_voxelVolumeBuffer = null;
             }
 
-            if (m_surfaceMaterialBuffer != null)
+            if (m_triangleMaterialSetBuffer != null)
             {
-                m_surfaceMaterialBuffer.Release();
-                m_surfaceMaterialBuffer = null;
+                m_triangleMaterialSetBuffer.Release();
+                m_triangleMaterialSetBuffer = null;
             }
 
-            if (m_emptySurfaceMaterialBuffer != null)
+            if (m_emptyTriangleMaterialSetBuffer != null)
             {
-                m_emptySurfaceMaterialBuffer.Release();
-                m_emptySurfaceMaterialBuffer = null;
+                m_emptyTriangleMaterialSetBuffer.Release();
+                m_emptyTriangleMaterialSetBuffer = null;
             }
         }
 
@@ -241,7 +241,7 @@ namespace Tuntenfisch.World
             {
                 m_meshFilter.sharedMesh = null;
                 m_meshCollider.sharedMesh = null;
-                BindSurfaceMaterialBuffer(m_emptySurfaceMaterialBuffer);
+                BindTriangleMaterialSetBuffer(m_emptyTriangleMaterialSetBuffer);
 
                 return;
             }
@@ -262,7 +262,7 @@ namespace Tuntenfisch.World
 #endif
             m_meshFilter.sharedMesh = null;
             m_meshFilter.sharedMesh = m_mesh;
-            CopySurfaceMaterials(result.GeneratedSurfaceMaterials, result.SurfaceMaterialCount);
+            CopyTriangleMaterialSets(result.GeneratedTriangleMaterialSets, result.TriangleMaterialSetCount);
 
             m_bakeJobHandle = new BakeJob(m_mesh.GetEntityId()).Schedule();
             m_flags |= ChunkFlags.IsBakingMesh;
@@ -287,18 +287,18 @@ namespace Tuntenfisch.World
         private void ApplyRenderMaterial()
         {
             m_meshRenderer.material = WorldManager.VoxelConfig.MaterialConfig.RenderMaterial;
-            BindSurfaceMaterialBuffer(m_surfaceMaterialBuffer ?? m_emptySurfaceMaterialBuffer);
+            BindTriangleMaterialSetBuffer(m_triangleMaterialSetBuffer ?? m_emptyTriangleMaterialSetBuffer);
         }
 
-        private void CreateEmptySurfaceMaterialBuffer()
+        private void CreateEmptyTriangleMaterialSetBuffer()
         {
-            if (m_emptySurfaceMaterialBuffer == null)
+            if (m_emptyTriangleMaterialSetBuffer == null)
             {
-                // Fallback buffer used when the chunk has no generated surface materials yet.
-                m_emptySurfaceMaterialBuffer = new ComputeBuffer(1, 4 * sizeof(uint));
-                m_emptySurfaceMaterialBuffer.SetData(new uint[]
+                // Fallback buffer used when the chunk has no generated triangle material sets yet.
+                m_emptyTriangleMaterialSetBuffer = new ComputeBuffer(1, 4 * sizeof(uint));
+                m_emptyTriangleMaterialSetBuffer.SetData(new uint[]
                 {
-                    0u,
+                    0xFFFFFF00u,
                     255u,
                     255u,
                     255u
@@ -306,49 +306,49 @@ namespace Tuntenfisch.World
             }
         }
 
-        private void EnsureSurfaceMaterialBuffer(int triangleCount)
+        private void EnsureTriangleMaterialSetBuffer(int triangleCount)
         {
             int bufferCount = math.max(1, triangleCount);
 
-            if (m_surfaceMaterialBuffer?.count != bufferCount)
+            if (m_triangleMaterialSetBuffer?.count != bufferCount)
             {
-                m_surfaceMaterialBuffer?.Release();
-                m_surfaceMaterialBuffer = new ComputeBuffer(bufferCount, 4 * sizeof(uint));
+                m_triangleMaterialSetBuffer?.Release();
+                m_triangleMaterialSetBuffer = new ComputeBuffer(bufferCount, 4 * sizeof(uint));
             }
         }
 
-        private void CopySurfaceMaterials(ComputeBuffer generatedSurfaceMaterials, int surfaceMaterialCount)
+        private void CopyTriangleMaterialSets(ComputeBuffer generatedTriangleMaterialSets, int triangleMaterialSetCount)
         {
-            EnsureSurfaceMaterialBuffer(surfaceMaterialCount);
+            EnsureTriangleMaterialSetBuffer(triangleMaterialSetCount);
 
             ComputeShader copySurfaceMaterialsCompute = WorldManager.VoxelConfig.DualContouringConfig.CopySurfaceMaterialsCompute;
 
             if (copySurfaceMaterialsCompute == null)
             {
                 Debug.LogError("CopySurfaceMaterialsCompute is not assigned.");
-                BindSurfaceMaterialBuffer(m_emptySurfaceMaterialBuffer);
+                BindTriangleMaterialSetBuffer(m_emptyTriangleMaterialSetBuffer);
                 return;
             }
 
             const int kernelID = 0;
 
-            copySurfaceMaterialsCompute.SetBuffer(kernelID, ComputeShaderProperties.Source, generatedSurfaceMaterials);
-            copySurfaceMaterialsCompute.SetBuffer(kernelID, ComputeShaderProperties.Destination, m_surfaceMaterialBuffer);
-            copySurfaceMaterialsCompute.SetInt(ComputeShaderProperties.Count, surfaceMaterialCount);
-            copySurfaceMaterialsCompute.Dispatch(kernelID, new int3(surfaceMaterialCount, 1, 1));
+            copySurfaceMaterialsCompute.SetBuffer(kernelID, ComputeShaderProperties.Source, generatedTriangleMaterialSets);
+            copySurfaceMaterialsCompute.SetBuffer(kernelID, ComputeShaderProperties.Destination, m_triangleMaterialSetBuffer);
+            copySurfaceMaterialsCompute.SetInt(ComputeShaderProperties.Count, triangleMaterialSetCount);
+            copySurfaceMaterialsCompute.Dispatch(kernelID, new int3(triangleMaterialSetCount, 1, 1));
 
-            BindSurfaceMaterialBuffer(m_surfaceMaterialBuffer);
+            BindTriangleMaterialSetBuffer(m_triangleMaterialSetBuffer);
         }
 
-        private void BindSurfaceMaterialBuffer(ComputeBuffer surfaceMaterialBuffer)
+        private void BindTriangleMaterialSetBuffer(ComputeBuffer triangleMaterialSetBuffer)
         {
-            if (surfaceMaterialBuffer == null || m_meshRenderer == null || m_materialPropertyBlock == null)
+            if (triangleMaterialSetBuffer == null || m_meshRenderer == null || m_materialPropertyBlock == null)
             {
                 return;
             }
 
             m_meshRenderer.GetPropertyBlock(m_materialPropertyBlock);
-            m_materialPropertyBlock.SetBuffer(ShaderProperties.SurfaceMaterials, surfaceMaterialBuffer);
+            m_materialPropertyBlock.SetBuffer(ShaderProperties.TriangleMaterialSets, triangleMaterialSetBuffer);
             m_meshRenderer.SetPropertyBlock(m_materialPropertyBlock);
         }
 

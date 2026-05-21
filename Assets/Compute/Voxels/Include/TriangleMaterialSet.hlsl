@@ -1,12 +1,10 @@
-#ifndef TUNTENFISCH_VOXELS_SURFACE_MATERIAL
-#define TUNTENFISCH_VOXELS_SURFACE_MATERIAL
+#ifndef TUNTENFISCH_VOXELS_TRIANGLE_MATERIAL_SET
+#define TUNTENFISCH_VOXELS_TRIANGLE_MATERIAL_SET
 
-struct SurfaceMaterial
+struct TriangleMaterialSet
 {
     uint indices;
-    uint weights0;
-    uint weights1;
-    uint weights2;
+    uint3 weights;
 };
 
 uint PackBytes(uint4 unpackedBytes)

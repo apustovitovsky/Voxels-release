@@ -4,8 +4,9 @@
 #pragma kernel GenerateTriangles
 
 #include "Assets/Compute/Voxels/Include/Cell.hlsl"
-#include "Assets/Compute/Voxels/Include/SurfaceMaterial.hlsl"
+#include "Assets/Compute/Voxels/Include/TriangleMaterialSet.hlsl"
 #include "Assets/Compute/Voxels/Include/MaterialWeights.hlsl"
+#include "Assets/Compute/Voxels/Include/MaterialSet/MaterialSetMergeBuffer.hlsl"
 #include "Assets/Compute/Voxels/Include/Vertex.hlsl"
 #include "Assets/Compute/Voxels/Include/Voxel.hlsl"
 #include "Assets/Compute/Voxels/Include/VoxelVolume.hlsl"
@@ -50,7 +51,7 @@ float schmitzParticleStepSize;
 RWStructuredBuffer<CellVertexInfo> cellVertexInfoLookupTable;
 RWStructuredBuffer<Vertex> generatedVertices0;
 RWStructuredBuffer<Vertex> generatedVertices1;
-RWStructuredBuffer<SurfaceMaterial> generatedSurfaceMaterials;
+RWStructuredBuffer<TriangleMaterialSet> generatedTriangleMaterialSets;
 RWByteAddressBuffer generatedTriangles;
 
 // Theoretically we can declare below arrays locally and pass them around functions with the "out" or "inout" modifier but that will
@@ -58,9 +59,6 @@ RWByteAddressBuffer generatedTriangles;
 // https://gamedev.stackexchange.com/questions/190131/splitting-up-hlsl-code-into-separate-functions-causes-the-number-of-needed-tempo.
 static uint numberOfIntersections;
 static Intersection intersections[maxNumberOfIntersections];
-static uint4 materialWeightScore0;
-static uint4 materialWeightScore1;
-static uint materialWeightSourceCount;
 static float3 forces[numberOfCellCorners];
 static CellVertexInfo neighbourCellVertexInfos[3];
 
@@ -113,37 +111,22 @@ float3 CalculateForce(float3 corner)
     return force;
 }
 
-void ClearMaterialWeightScores()
-{
-    materialWeightScore0 = 0;
-    materialWeightScore1 = 0;
-    materialWeightSourceCount = 0;
-}
-
-void AddMaterialWeightsToScores(uint2 materialWeights)
-{
-    materialWeightScore0 += UnpackMaterialWeights0(materialWeights);
-    materialWeightScore1 += UnpackMaterialWeights1(materialWeights);
-    materialWeightSourceCount++;
-}
-
 Vertex CalculateCenterVertex()
 {
     Vertex vertex = Vertex::Create();
-    ClearMaterialWeightScores();
+    MaterialSetMergeReset();
 
-    [unroll(maxNumberOfIntersections)]
     for (uint intersectionIndex = 0; intersectionIndex < numberOfIntersections; intersectionIndex++)
     {
         Intersection intersection = intersections[intersectionIndex];
 
         vertex.SetPosition(vertex.GetPosition() + intersection.position);
         vertex.SetNormal(vertex.GetNormal() + intersection.normal);
-        AddMaterialWeightsToScores(intersection.materialWeights);
+        MaterialSetMergeAccumulate(MaterialWeightsToMaterialSet(intersection.materialWeights));
     }
     vertex.SetPosition(vertex.GetPosition() / numberOfIntersections);
     vertex.SetNormal(normalize(vertex.GetNormal()));
-    vertex.SetMaterialWeights(AverageMaterialWeightScores(materialWeightScore0, materialWeightScore1, materialWeightSourceCount));
+    vertex.SetMaterialWeights(MaterialSetMergeCompute());
 
     return vertex;
 }
@@ -231,7 +214,7 @@ void ApplyLevelOfDetail(uint3 id : SV_DispatchThreadID)
     uint numberOfChildCellVertices = 0;
     CellVertexInfo parentCellVertexInfo = CellVertexInfo::Create();
     Vertex parentCellVertex = Vertex::Create();
-    ClearMaterialWeightScores();
+    MaterialSetMergeReset();
 
     for (uint cornerIndex = 0; cornerIndex < numberOfCellCorners; cornerIndex++)
     {
@@ -244,7 +227,7 @@ void ApplyLevelOfDetail(uint3 id : SV_DispatchThreadID)
 
             parentCellVertex.SetPosition(parentCellVertex.GetPosition() + childCellVertex.GetPosition());
             parentCellVertex.SetNormal(parentCellVertex.GetNormal() + childCellVertex.GetNormal());
-            AddMaterialWeightsToScores(childCellVertex.GetMaterialWeights());
+            MaterialSetMergeAccumulate(childCellVertex.GetMaterialWeights());
             numberOfChildCellVertices++;
         }
     }
@@ -253,7 +236,7 @@ void ApplyLevelOfDetail(uint3 id : SV_DispatchThreadID)
     {
         parentCellVertex.SetPosition(parentCellVertex.GetPosition() / numberOfChildCellVertices);
         parentCellVertex.SetNormal(normalize(parentCellVertex.GetNormal()));
-        parentCellVertex.SetMaterialWeights(AverageMaterialWeightScores(materialWeightScore0, materialWeightScore1, materialWeightSourceCount));
+        parentCellVertex.SetMaterialWeights(MaterialSetMergeCompute());
 
         parentCellVertexInfo.index = generatedVertices1.IncrementCounter();
         generatedVertices1[parentCellVertexInfo.index] = parentCellVertex;
@@ -286,20 +269,17 @@ bool ArePairwiseDistinct(uint3 indices)
     return indices.x != indices.y && indices.x != indices.z && indices.y != indices.z;
 }
 
-SurfaceMaterial BuildSurfaceMaterial(Vertex firstVertex, Vertex secondVertex, Vertex thirdVertex)
+TriangleMaterialSet BuildTriangleMaterialSet(Vertex firstVertex, Vertex secondVertex, Vertex thirdVertex)
 {
-    uint2 weights0 = firstVertex.GetMaterialWeights();
-    uint2 weights1 = secondVertex.GetMaterialWeights();
-    uint2 weights2 = thirdVertex.GetMaterialWeights();
-    uint top4Indices = BuildTop4MaterialIndices(weights0, weights1, weights2);
+    uint2 materialSet0 = firstVertex.GetMaterialWeights();
+    uint2 materialSet1 = secondVertex.GetMaterialWeights();
+    uint2 materialSet2 = thirdVertex.GetMaterialWeights();
 
-    SurfaceMaterial surfaceMaterial;
-    surfaceMaterial.indices = top4Indices;
-    surfaceMaterial.weights0 = PickWeightsForTop4(weights0, top4Indices);
-    surfaceMaterial.weights1 = PickWeightsForTop4(weights1, top4Indices);
-    surfaceMaterial.weights2 = PickWeightsForTop4(weights2, top4Indices);
+    TriangleMaterialSet triangleMaterialSet;
+    triangleMaterialSet.indices = MaterialSetMergeComputeIds3(materialSet0, materialSet1, materialSet2);
+    triangleMaterialSet.weights = MaterialSetPickWeightsForIds3(materialSet0, materialSet1, materialSet2, triangleMaterialSet.indices);
 
-    return surfaceMaterial;
+    return triangleMaterialSet;
 }
 
 void GenerateTriangle(CellVertexInfo cellVertexInfo, CellVertexInfo firstNeighbourCellVertexInfo, CellVertexInfo secondNeighbourCellVertexInfo)
@@ -315,7 +295,7 @@ void GenerateTriangle(CellVertexInfo cellVertexInfo, CellVertexInfo firstNeighbo
     // generated and therefore need to stay empty.
     uint triangleId = cellVertexInfoLookupTable.IncrementCounter();
     generatedTriangles.Store3(8 + 12 * triangleId, indices);
-    generatedSurfaceMaterials[triangleId] = BuildSurfaceMaterial(
+    generatedTriangleMaterialSets[triangleId] = BuildTriangleMaterialSet(
         generatedVertices0[cellVertexInfo.index],
         generatedVertices0[firstNeighbourCellVertexInfo.index],
         generatedVertices0[secondNeighbourCellVertexInfo.index]

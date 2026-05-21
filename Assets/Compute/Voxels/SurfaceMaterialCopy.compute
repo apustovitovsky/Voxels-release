@@ -1,9 +1,9 @@
 #pragma kernel CopySurfaceMaterials
 
-#include "Assets/Compute/Voxels/Include/SurfaceMaterial.hlsl"
+#include "Assets/Compute/Voxels/Include/TriangleMaterialSet.hlsl"
 
-StructuredBuffer<SurfaceMaterial> Source;
-RWStructuredBuffer<SurfaceMaterial> Destination;
+StructuredBuffer<TriangleMaterialSet> Source;
+RWStructuredBuffer<TriangleMaterialSet> Destination;
 
 uint Count;
 

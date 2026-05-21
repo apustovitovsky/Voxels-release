@@ -12,9 +12,9 @@ namespace Tuntenfisch.Voxels.DC
         public NativeArray<int> Indices { get; }
         public int IndexCount { get; }
         public int IndexStartIndex { get; }
-        public ComputeBuffer GeneratedSurfaceMaterials { get; }
-        public int SurfaceMaterialCount { get; }
-        public int TriangleCount => SurfaceMaterialCount;
+        public ComputeBuffer GeneratedTriangleMaterialSets { get; }
+        public int TriangleMaterialSetCount { get; }
+        public int TriangleCount => TriangleMaterialSetCount;
 
         public MeshGenerationResult(
             NativeArray<GPUVertex> vertices,
@@ -23,8 +23,8 @@ namespace Tuntenfisch.Voxels.DC
             NativeArray<int> indices,
             int indexCount,
             int indexStartIndex,
-            ComputeBuffer generatedSurfaceMaterials,
-            int surfaceMaterialCount)
+            ComputeBuffer generatedTriangleMaterialSets,
+            int triangleMaterialSetCount)
         {
             Vertices = vertices;
             VertexCount = vertexCount;
@@ -32,8 +32,8 @@ namespace Tuntenfisch.Voxels.DC
             Indices = indices;
             IndexCount = indexCount;
             IndexStartIndex = indexStartIndex;
-            GeneratedSurfaceMaterials = generatedSurfaceMaterials;
-            SurfaceMaterialCount = surfaceMaterialCount;
+            GeneratedTriangleMaterialSets = generatedTriangleMaterialSets;
+            TriangleMaterialSetCount = triangleMaterialSetCount;
         }
     }
 }

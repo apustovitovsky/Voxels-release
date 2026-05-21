@@ -16,4 +16,4 @@ MonoBehaviour:
   m_copySurfaceMaterialsCompute: {fileID: 7200000, guid: 9ed05cf958bc4ddd93a7204d1931f631, type: 3}
   m_schmitzParticleIterations: 12
   m_schmitzParticleStepSize: 0.111
-  m_sharpFeatureAngle: 119
+  m_sharpFeatureAngle: 40

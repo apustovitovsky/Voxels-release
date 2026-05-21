@@ -8,7 +8,7 @@ namespace Tuntenfisch.Voxels
         public static readonly int Count = Shader.PropertyToID("Count");
         public static readonly int CellVertexInfoLookupTable = Shader.PropertyToID("cellVertexInfoLookupTable");
         public static readonly int Destination = Shader.PropertyToID("Destination");
-        public static readonly int GeneratedSurfaceMaterials = Shader.PropertyToID("generatedSurfaceMaterials");
+        public static readonly int GeneratedTriangleMaterialSets = Shader.PropertyToID("generatedTriangleMaterialSets");
         public static readonly int GeneratedTriangles = Shader.PropertyToID("generatedTriangles");
         public static readonly int GeneratedVertices0 = Shader.PropertyToID("generatedVertices0");
         public static readonly int GeneratedVertices1 = Shader.PropertyToID("generatedVertices1");

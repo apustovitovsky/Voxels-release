@@ -1,7 +1,8 @@
 #ifndef TUNTENFISCH_VOXELS_MATERIAL_WEIGHTS
 #define TUNTENFISCH_VOXELS_MATERIAL_WEIGHTS
 
-#include "Assets/Compute/Voxels/Include/SurfaceMaterial.hlsl"
+#include "Assets/Compute/Voxels/Include/TriangleMaterialSet.hlsl"
+#include "Assets/Compute/Voxels/Include/MaterialSet/MaterialSet.hlsl"
 
 static const uint numberOfGlobalMaterialSlots = 8;
 
@@ -83,6 +84,66 @@ uint2 CreateSingleMaterialWeights(uint materialIndex)
     }
 
     return CreateMaterialWeights(low, high);
+}
+
+uint2 MaterialWeightsToMaterialSet(uint2 materialWeights)
+{
+    uint4 score0 = UnpackMaterialWeights0(materialWeights);
+    uint4 score1 = UnpackMaterialWeights1(materialWeights);
+    uint4 selectedIds = materialSetInvalidMaterialIds;
+    uint4 selectedWeights = 0u;
+
+    for (uint selectedIndex = 0u; selectedIndex < 4u; selectedIndex++)
+    {
+        bool found = false;
+        uint bestMaterialId = materialSetInvalidMaterialId;
+        uint bestWeight = 0u;
+
+        for (uint materialId = 0u; materialId < numberOfGlobalMaterialSlots; materialId++)
+        {
+            uint weight = materialId < 4u
+                ? GetUint4Component(score0, materialId)
+                : GetUint4Component(score1, materialId - 4u);
+
+            if (weight == 0u)
+            {
+                continue;
+            }
+
+            if (!found || MaterialSetIsBetter(weight, materialId, bestWeight, bestMaterialId))
+            {
+                found = true;
+                bestMaterialId = materialId;
+                bestWeight = weight;
+            }
+        }
+
+        if (!found)
+        {
+            break;
+        }
+
+        selectedIds = MaterialSetSetComponent(selectedIds, selectedIndex, bestMaterialId);
+        selectedWeights = MaterialSetSetComponent(selectedWeights, selectedIndex, bestWeight);
+
+        if (bestMaterialId < 4u)
+        {
+            score0 = SetUint4Component(score0, bestMaterialId, 0u);
+        }
+        else
+        {
+            score1 = SetUint4Component(score1, bestMaterialId - 4u, 0u);
+        }
+    }
+
+    uint selectedWeightSum = selectedWeights.x + selectedWeights.y + selectedWeights.z + selectedWeights.w;
+
+    if (selectedWeightSum == 0u)
+    {
+        return MaterialSetCreateSingle(0u);
+    }
+
+    return MaterialSetPack(selectedIds, selectedWeights);
 }
 
 uint PackMaterialWeights4(uint4 weights)
@@ -242,14 +303,12 @@ uint BuildTop4MaterialIndices(uint2 weights0, uint2 weights1, uint2 weights2)
 
     uint4 top4Indices = 0;
 
-    [unroll]
     for (uint topIndex = 0; topIndex < 4; topIndex++)
     {
         bool found = false;
         uint bestMaterialIndex = 0;
         uint bestScore = 0;
 
-        [unroll]
         for (uint candidateMaterialIndex = 0; candidateMaterialIndex < numberOfGlobalMaterialSlots; candidateMaterialIndex++)
         {
             uint score = candidateMaterialIndex < 4
