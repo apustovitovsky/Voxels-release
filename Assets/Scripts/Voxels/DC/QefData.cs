@@ -2,6 +2,14 @@ using Unity.Mathematics;
 
 namespace Tuntenfisch.Voxels.DC
 {
+    public enum QefPlacementResult : byte
+    {
+        None = 0,
+        Accepted = 1,
+        OutsideFallback = 2,
+        SingularFallback = 3
+    }
+
     public struct QefData
     {
         public float3x3 Ata;
@@ -19,26 +27,48 @@ namespace Tuntenfisch.Voxels.DC
             Count++;
         }
 
-        public readonly float3 Solve(float3 fallback, out float error)
+        public readonly bool TrySolveInsideUnitCell(float3 fallback, out float3 position, out float error, out QefPlacementResult result)
         {
-            const float determinantEpsilon = 1e-6f;
+            const float bias = 1e-4f;
+            const float regularizedDeterminantEpsilon = 1e-12f;
 
-            float determinant = math.determinant(Ata);
-            float3 position = fallback;
+            float3x3 ata = Ata;
+            float3 atb = Atb;
+            ata.c0.x += bias;
+            ata.c1.y += bias;
+            ata.c2.z += bias;
+            atb += bias * fallback;
 
-            if (math.isfinite(determinant) && math.abs(determinant) > determinantEpsilon)
+            float determinant = math.determinant(ata);
+
+            if (math.isfinite(determinant) && math.abs(determinant) > regularizedDeterminantEpsilon)
             {
-                float3 candidate = math.mul(math.inverse(Ata), Atb);
+                float3 candidate = math.mul(math.inverse(ata), atb);
 
                 if (math.all(math.isfinite(candidate)))
                 {
-                    position = candidate;
+                    if (math.all(candidate >= float3.zero) && math.all(candidate <= new float3(1.0f)))
+                    {
+                        position = candidate;
+                        error = EvaluateError(position);
+                        result = QefPlacementResult.Accepted;
+
+                        return true;
+                    }
+
+                    position = fallback;
+                    error = EvaluateError(position);
+                    result = QefPlacementResult.OutsideFallback;
+
+                    return false;
                 }
             }
 
+            position = fallback;
             error = EvaluateError(position);
+            result = QefPlacementResult.SingularFallback;
 
-            return position;
+            return false;
         }
 
         public readonly float EvaluateError(float3 position)

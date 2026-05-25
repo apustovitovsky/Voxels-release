@@ -22,6 +22,8 @@ namespace Tuntenfisch.Voxels.DC
         [Min(0)]
         [SerializeField]
         private int m_initialTaskPoolPopulation = 0;
+        [SerializeField]
+        private bool m_logQefDiagnostics = false;
 
         private VoxelConfig m_voxelConfig;
         private Queue<Task> m_tasks;
@@ -132,6 +134,7 @@ namespace Tuntenfisch.Voxels.DC
             private NativeArray<PackedVoxel> m_voxels;
             private NativeArray<CellVertex> m_vertexPerCell;
             private NativeArray<int> m_cellToVertexIndex;
+            private NativeArray<QefDiagnostics> m_qefDiagnostics;
             private NativeList<GPUVertex> m_vertices;
             private NativeList<int> m_indices;
             private AsyncGPUReadbackRequest m_readbackRequest;
@@ -172,7 +175,7 @@ namespace Tuntenfisch.Voxels.DC
 
                     if (m_readbackRequest.hasError)
                     {
-                        Debug.LogWarning("GPU voxel volume readback error detected.");
+                        Debug.LogWarning("GPU voxel volume readback error detected; returning an empty AdaptiveBurst mesh.");
                         m_status = WorkerStatus.Done;
 
                         return m_status;
@@ -188,6 +191,13 @@ namespace Tuntenfisch.Voxels.DC
                 {
                     m_jobHandle.Complete();
                     m_jobsScheduled = false;
+
+                    if (m_parent.m_logQefDiagnostics)
+                    {
+                        QefDiagnostics diagnostics = m_qefDiagnostics[0];
+                        Debug.Log($"AdaptiveBurst QEF: total={diagnostics.Total}, accepted={diagnostics.Accepted}, outsideFallback={diagnostics.OutsideFallback}, singularFallback={diagnostics.SingularFallback}.");
+                    }
+
                     m_status = WorkerStatus.Done;
                 }
 
@@ -234,7 +244,8 @@ namespace Tuntenfisch.Voxels.DC
                 {
                     VertexPerCell = m_vertexPerCell,
                     CellToVertexIndex = m_cellToVertexIndex,
-                    Vertices = m_vertices
+                    Vertices = m_vertices,
+                    Diagnostics = m_qefDiagnostics
                 }.Schedule(cellVerticesHandle);
 
                 m_jobHandle = new GenerateTrianglesJob
@@ -267,11 +278,12 @@ namespace Tuntenfisch.Voxels.DC
                 int voxelCount = m_parent.m_voxelConfig.VoxelVolumeConfig.VoxelCount;
                 int cellCount = m_parent.m_voxelConfig.VoxelVolumeConfig.CellCount;
                 int numberOfCellsAlongAxis = m_parent.m_voxelConfig.VoxelVolumeConfig.NumberOfCellsAlongAxis;
-                int maxIndexCount = 18 * (numberOfCellsAlongAxis - 1) * (numberOfCellsAlongAxis - 1) * (numberOfCellsAlongAxis - 1);
+                int maxIndexCount = 18 * numberOfCellsAlongAxis * (numberOfCellsAlongAxis - 1) * (numberOfCellsAlongAxis - 1);
 
                 m_voxels = new NativeArray<PackedVoxel>(voxelCount, Allocator.Persistent);
                 m_vertexPerCell = new NativeArray<CellVertex>(cellCount, Allocator.Persistent);
                 m_cellToVertexIndex = new NativeArray<int>(cellCount, Allocator.Persistent);
+                m_qefDiagnostics = new NativeArray<QefDiagnostics>(1, Allocator.Persistent);
                 m_vertices = new NativeList<GPUVertex>(cellCount, Allocator.Persistent);
                 m_indices = new NativeList<int>(maxIndexCount, Allocator.Persistent);
             }
@@ -291,6 +303,11 @@ namespace Tuntenfisch.Voxels.DC
                 if (m_cellToVertexIndex.IsCreated)
                 {
                     m_cellToVertexIndex.Dispose();
+                }
+
+                if (m_qefDiagnostics.IsCreated)
+                {
+                    m_qefDiagnostics.Dispose();
                 }
 
                 if (m_vertices.IsCreated)
@@ -316,7 +333,34 @@ namespace Tuntenfisch.Voxels.DC
         {
             public GPUVertex Vertex;
             public float Error;
+            public QefPlacementResult PlacementResult;
             public bool Active;
+        }
+
+        internal struct QefDiagnostics
+        {
+            public int Total;
+            public int Accepted;
+            public int OutsideFallback;
+            public int SingularFallback;
+
+            public void Add(QefPlacementResult result)
+            {
+                Total++;
+
+                switch (result)
+                {
+                    case QefPlacementResult.Accepted:
+                        Accepted++;
+                        break;
+                    case QefPlacementResult.OutsideFallback:
+                        OutsideFallback++;
+                        break;
+                    case QefPlacementResult.SingularFallback:
+                        SingularFallback++;
+                        break;
+                }
+            }
         }
 
         [BurstCompile]
@@ -372,9 +416,7 @@ namespace Tuntenfisch.Voxels.DC
                 }
 
                 float3 averagePosition = positionSum / numberOfIntersections;
-                float3 localPosition = qef.Solve(averagePosition, out float error);
-                localPosition = math.clamp(localPosition, float3.zero, new float3(1.0f));
-                error = qef.EvaluateError(localPosition);
+                qef.TrySolveInsideUnitCell(averagePosition, out float3 localPosition, out float error, out QefPlacementResult placementResult);
                 float3 volumePosition = VoxelSpacing * (localPosition + coordinate - 0.5f * (NumberOfVoxelsAlongAxis - 1.0f));
                 float3 vertexNormal = math.normalizesafe(normalSum);
 
@@ -382,6 +424,7 @@ namespace Tuntenfisch.Voxels.DC
                 {
                     Vertex = new GPUVertex(volumePosition, vertexNormal, materialCounts.GetDominant()),
                     Error = error,
+                    PlacementResult = placementResult,
                     Active = true
                 };
             }
@@ -399,9 +442,12 @@ namespace Tuntenfisch.Voxels.DC
             public NativeArray<CellVertex> VertexPerCell;
             public NativeArray<int> CellToVertexIndex;
             public NativeList<GPUVertex> Vertices;
+            public NativeArray<QefDiagnostics> Diagnostics;
 
             public void Execute()
             {
+                QefDiagnostics diagnostics = default;
+
                 for (int index = 0; index < VertexPerCell.Length; index++)
                 {
                     CellVertex cellVertex = VertexPerCell[index];
@@ -415,7 +461,10 @@ namespace Tuntenfisch.Voxels.DC
 
                     CellToVertexIndex[index] = Vertices.Length;
                     Vertices.AddNoResize(cellVertex.Vertex);
+                    diagnostics.Add(cellVertex.PlacementResult);
                 }
+
+                Diagnostics[0] = diagnostics;
             }
         }
 
@@ -432,60 +481,158 @@ namespace Tuntenfisch.Voxels.DC
 
             public void Execute()
             {
-                int anchorAxisLength = NumberOfCellsAlongAxis - 1;
+                ProcessXEdges();
+                ProcessYEdges();
+                ProcessZEdges();
+            }
 
-                for (int z = 0; z < anchorAxisLength; z++)
+            private void ProcessXEdges()
+            {
+                for (int z = 1; z < NumberOfCellsAlongAxis; z++)
                 {
-                    for (int y = 0; y < anchorAxisLength; y++)
+                    for (int y = 1; y < NumberOfCellsAlongAxis; y++)
                     {
-                        for (int x = 0; x < anchorAxisLength; x++)
+                        for (int x = 0; x < NumberOfCellsAlongAxis; x++)
                         {
-                            int3 coordinate = new int3(x, y, z);
-
-                            EmitEdgeTriangles(coordinate, 0);
-                            EmitEdgeTriangles(coordinate, 1);
-                            EmitEdgeTriangles(coordinate, 2);
+                            EmitPatchForXEdge(new int3(x, y, z));
                         }
                     }
                 }
             }
 
-            private void EmitEdgeTriangles(int3 coordinate, int edgeDirection)
+            private void ProcessYEdges()
             {
-                GetTriangulationEdge(edgeDirection, out int firstCornerIndex, out int secondCornerIndex);
-                PackedVoxel sampleA = GetVoxel(coordinate + GetCellCorner(firstCornerIndex));
-                PackedVoxel sampleB = GetVoxel(coordinate + GetCellCorner(secondCornerIndex));
+                for (int z = 1; z < NumberOfCellsAlongAxis; z++)
+                {
+                    for (int y = 0; y < NumberOfCellsAlongAxis; y++)
+                    {
+                        for (int x = 1; x < NumberOfCellsAlongAxis; x++)
+                        {
+                            EmitPatchForYEdge(new int3(x, y, z));
+                        }
+                    }
+                }
+            }
+
+            private void ProcessZEdges()
+            {
+                for (int z = 0; z < NumberOfCellsAlongAxis; z++)
+                {
+                    for (int y = 1; y < NumberOfCellsAlongAxis; y++)
+                    {
+                        for (int x = 1; x < NumberOfCellsAlongAxis; x++)
+                        {
+                            EmitPatchForZEdge(new int3(x, y, z));
+                        }
+                    }
+                }
+            }
+
+            private void EmitPatchForXEdge(int3 edge)
+            {
+                PackedVoxel sampleA = GetVoxel(edge);
+                PackedVoxel sampleB = GetVoxel(edge + new int3(1, 0, 0));
 
                 if (sampleA.IsSolid == sampleB.IsSolid)
                 {
                     return;
                 }
 
-                int baseIndex = GetCellVertexIndex(coordinate);
-                GetNeighbourOffsets(edgeDirection, out int3 firstOffset, out int3 secondOffset, out int3 thirdOffset);
-                int firstNeighbourIndex = GetCellVertexIndex(coordinate + firstOffset);
-                int secondNeighbourIndex = GetCellVertexIndex(coordinate + secondOffset);
-                int thirdNeighbourIndex = GetCellVertexIndex(coordinate + thirdOffset);
+                int i0 = GetCellVertexIndex(edge + new int3(0, -1, -1));
+                int i1 = GetCellVertexIndex(edge + new int3(0, 0, -1));
+                int i2 = GetCellVertexIndex(edge + new int3(0, -1, 0));
+                int i3 = GetCellVertexIndex(edge);
 
-                if (sampleB.Value < 0.0f)
-                {
-                    EmitTriangle(baseIndex, firstNeighbourIndex, secondNeighbourIndex);
-                    EmitTriangle(baseIndex, secondNeighbourIndex, thirdNeighbourIndex);
-                }
-                else
-                {
-                    EmitTriangle(baseIndex, secondNeighbourIndex, firstNeighbourIndex);
-                    EmitTriangle(baseIndex, thirdNeighbourIndex, secondNeighbourIndex);
-                }
-            }
-
-            private void EmitTriangle(int first, int second, int third)
-            {
-                if (first < 0 || second < 0 || third < 0 || first == second || first == third || second == third)
+                if (!IsValidQuad(i0, i1, i2, i3))
                 {
                     return;
                 }
 
+                if (sampleB.Value < 0.0f)
+                {
+                    EmitTriangle(i0, i2, i3);
+                    EmitTriangle(i0, i3, i1);
+                }
+                else
+                {
+                    EmitTriangle(i0, i3, i2);
+                    EmitTriangle(i0, i1, i3);
+                }
+            }
+
+            private void EmitPatchForYEdge(int3 edge)
+            {
+                PackedVoxel sampleA = GetVoxel(edge);
+                PackedVoxel sampleB = GetVoxel(edge + new int3(0, 1, 0));
+
+                if (sampleA.IsSolid == sampleB.IsSolid)
+                {
+                    return;
+                }
+
+                int i0 = GetCellVertexIndex(edge + new int3(-1, 0, -1));
+                int i1 = GetCellVertexIndex(edge + new int3(0, 0, -1));
+                int i2 = GetCellVertexIndex(edge + new int3(-1, 0, 0));
+                int i3 = GetCellVertexIndex(edge);
+
+                if (!IsValidQuad(i0, i1, i2, i3))
+                {
+                    return;
+                }
+
+                if (sampleB.Value < 0.0f)
+                {
+                    EmitTriangle(i0, i1, i3);
+                    EmitTriangle(i0, i3, i2);
+                }
+                else
+                {
+                    EmitTriangle(i0, i3, i1);
+                    EmitTriangle(i0, i2, i3);
+                }
+            }
+
+            private void EmitPatchForZEdge(int3 edge)
+            {
+                PackedVoxel sampleA = GetVoxel(edge);
+                PackedVoxel sampleB = GetVoxel(edge + new int3(0, 0, 1));
+
+                if (sampleA.IsSolid == sampleB.IsSolid)
+                {
+                    return;
+                }
+
+                int i0 = GetCellVertexIndex(edge + new int3(-1, -1, 0));
+                int i1 = GetCellVertexIndex(edge + new int3(0, -1, 0));
+                int i2 = GetCellVertexIndex(edge + new int3(-1, 0, 0));
+                int i3 = GetCellVertexIndex(edge);
+
+                if (!IsValidQuad(i0, i1, i2, i3))
+                {
+                    return;
+                }
+
+                if (sampleB.Value < 0.0f)
+                {
+                    EmitTriangle(i0, i2, i3);
+                    EmitTriangle(i0, i3, i1);
+                }
+                else
+                {
+                    EmitTriangle(i0, i3, i2);
+                    EmitTriangle(i0, i1, i3);
+                }
+            }
+
+            private static bool IsValidQuad(int i0, int i1, int i2, int i3)
+            {
+                return i0 >= 0 && i1 >= 0 && i2 >= 0 && i3 >= 0 &&
+                    i0 != i1 && i0 != i2 && i0 != i3 &&
+                    i1 != i2 && i1 != i3 && i2 != i3;
+            }
+
+            private void EmitTriangle(int first, int second, int third)
+            {
                 Indices.AddNoResize(first);
                 Indices.AddNoResize(second);
                 Indices.AddNoResize(third);
@@ -502,7 +649,7 @@ namespace Tuntenfisch.Voxels.DC
             }
         }
 
-        private struct MaterialCounts
+        internal struct MaterialCounts
         {
             private int m_dirt;
             private int m_rock;
@@ -555,7 +702,7 @@ namespace Tuntenfisch.Voxels.DC
             {
                 MaterialIndex result = m_first;
                 int count = GetCount(result);
-                int order = 0;
+                int order = GetOrder(result);
 
                 SetIfDominant(MaterialIndex.Dirt, m_dirt, m_dirtOrder, ref result, ref count, ref order);
                 SetIfDominant(MaterialIndex.Rock, m_rock, m_rockOrder, ref result, ref count, ref order);
@@ -575,6 +722,19 @@ namespace Tuntenfisch.Voxels.DC
                     case MaterialIndex.Sand: return m_sand;
                     case MaterialIndex.Grass: return m_grass;
                     case MaterialIndex.Snow: return m_snow;
+                    default: return 0;
+                }
+            }
+
+            private readonly int GetOrder(MaterialIndex materialIndex)
+            {
+                switch (materialIndex)
+                {
+                    case MaterialIndex.Dirt: return m_dirtOrder;
+                    case MaterialIndex.Rock: return m_rockOrder;
+                    case MaterialIndex.Sand: return m_sandOrder;
+                    case MaterialIndex.Grass: return m_grassOrder;
+                    case MaterialIndex.Snow: return m_snowOrder;
                     default: return 0;
                 }
             }
@@ -630,47 +790,6 @@ namespace Tuntenfisch.Voxels.DC
                 case 9: firstCornerIndex = 3; secondCornerIndex = 2; break;
                 case 10: firstCornerIndex = 7; secondCornerIndex = 6; break;
                 default: firstCornerIndex = 4; secondCornerIndex = 5; break;
-            }
-        }
-
-        private static void GetTriangulationEdge(int direction, out int firstCornerIndex, out int secondCornerIndex)
-        {
-            if (direction == 0)
-            {
-                firstCornerIndex = 2;
-                secondCornerIndex = 6;
-            }
-            else if (direction == 1)
-            {
-                firstCornerIndex = 5;
-                secondCornerIndex = 6;
-            }
-            else
-            {
-                firstCornerIndex = 7;
-                secondCornerIndex = 6;
-            }
-        }
-
-        private static void GetNeighbourOffsets(int direction, out int3 first, out int3 second, out int3 third)
-        {
-            if (direction == 0)
-            {
-                first = new int3(0, 1, 0);
-                second = new int3(1, 1, 0);
-                third = new int3(1, 0, 0);
-            }
-            else if (direction == 1)
-            {
-                first = new int3(0, 0, 1);
-                second = new int3(0, 1, 1);
-                third = new int3(0, 1, 0);
-            }
-            else
-            {
-                first = new int3(1, 0, 0);
-                second = new int3(1, 0, 1);
-                third = new int3(0, 0, 1);
             }
         }
 
