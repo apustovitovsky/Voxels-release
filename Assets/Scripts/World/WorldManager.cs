@@ -14,12 +14,15 @@ using UnityEngine.Assertions;
 namespace Tuntenfisch.World
 {
     [RequireComponent(typeof(VoxelConfig), typeof(VoxelVolume), typeof(DualContouring))]
+    [RequireComponent(typeof(AdaptiveDualContouring))]
     [RequireComponent(typeof(CSGUtility))]
     public class WorldManager : SingletonComponent<WorldManager>
     {
         public static VoxelConfig VoxelConfig => Instance.m_voxelConfig;
         public static VoxelVolume VoxelVolume => Instance.m_voxelVolume;
         public static DualContouring DualContouring => Instance.m_dualContouring;
+        public static AdaptiveDualContouring AdaptiveDualContouring => Instance.m_adaptiveDualContouring;
+        public static MeshGenerationBackend GenerationBackend => Instance.m_meshGenerationBackend;
 
         private float ViewDistanceSquared => m_lodDistancesSquared[m_lodDistancesSquared.Length - 1];
 
@@ -33,10 +36,13 @@ namespace Tuntenfisch.World
         private int m_initialChunkPoolPopulation = 0;
         [SerializeField]
         private float[] m_lodDistances;
+        [SerializeField]
+        private MeshGenerationBackend m_meshGenerationBackend = MeshGenerationBackend.GPUCompute;
 
         private VoxelConfig m_voxelConfig;
         private VoxelVolume m_voxelVolume;
         private DualContouring m_dualContouring;
+        private AdaptiveDualContouring m_adaptiveDualContouring;
         private CSGUtility m_csgUtility;
         private ObjectPool<Chunk> m_chunkPool;
         private Dictionary<int3, Chunk> m_chunks;
@@ -61,6 +67,7 @@ namespace Tuntenfisch.World
 
             m_voxelVolume = GetComponent<VoxelVolume>();
             m_dualContouring = GetComponent<DualContouring>();
+            m_adaptiveDualContouring = GetComponent<AdaptiveDualContouring>();
             m_csgUtility = GetComponent<CSGUtility>();
 
             m_chunkPool = new ObjectPool<Chunk>(() => { return Instantiate(m_chunkPrefab, transform).GetComponent<Chunk>(); }, m_initialChunkPoolPopulation);

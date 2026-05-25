@@ -26,5 +26,12 @@ namespace Tuntenfisch.Voxels.DC
         private float3 m_position;
         private half4 m_normal;
         private readonly MaterialIndex m_materialIndex;
+
+        public GPUVertex(float3 position, float3 normal, MaterialIndex materialIndex)
+        {
+            m_position = position;
+            m_normal = new half4(new float4(normal, 0.0f));
+            m_materialIndex = materialIndex;
+        }
     }
 }

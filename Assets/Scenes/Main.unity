@@ -131,6 +131,7 @@ GameObject:
   - component: {fileID: 337836009}
   - component: {fileID: 337836008}
   - component: {fileID: 337836007}
+  - component: {fileID: 337836010}
   - component: {fileID: 337836006}
   - component: {fileID: 337836005}
   m_Layer: 0
@@ -175,6 +176,7 @@ MonoBehaviour:
   - 200
   - 400
   - 800
+  m_meshGenerationBackend: 0
 --- !u!114 &337836006
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -216,6 +218,20 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   m_voxelVolumeCSGOperationsBufferCapacity: 20
+--- !u!114 &337836010
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 337836003}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c1861bd725d34ea388dfa97d26034376, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  m_numberOfWorkers: 2
+  m_initialTaskPoolPopulation: 0
 --- !u!114 &337836009
 MonoBehaviour:
   m_ObjectHideFlags: 0

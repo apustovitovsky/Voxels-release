@@ -65,16 +65,7 @@ namespace Tuntenfisch.World
             if ((m_flags & ChunkFlags.MeshRegenerationRequested) == ChunkFlags.MeshRegenerationRequested && (m_flags & ChunkFlags.IsBakingMesh) != ChunkFlags.IsBakingMesh && m_request == null)
             {
                 m_flags &= ~ChunkFlags.MeshRegenerationRequested;
-                m_request = WorldManager.DualContouring.RequestMeshAsync
-                (
-                    m_voxelVolumeBuffer,
-                    m_currentLOD,
-                    m_targetLOD,
-                    m_vertexCount,
-                    m_triangleCount,
-                    transform.position,
-                    m_onMeshGeneratedDelegate
-                );
+                m_request = RequestMeshAsync();
             }
 
             if ((m_flags & ChunkFlags.IsBakingMesh) == ChunkFlags.IsBakingMesh && m_bakeJobHandle.IsCompleted)
@@ -155,6 +146,31 @@ namespace Tuntenfisch.World
                 m_voxelVolumeBuffer?.Release();
                 m_voxelVolumeBuffer = new ComputeBuffer(WorldManager.VoxelConfig.VoxelVolumeConfig.VoxelCount, 2 * sizeof(uint));
             }
+        }
+
+        private IRequest RequestMeshAsync()
+        {
+            if (WorldManager.GenerationBackend == MeshGenerationBackend.AdaptiveBurst)
+            {
+                return WorldManager.AdaptiveDualContouring.RequestMeshAsync
+                (
+                    m_voxelVolumeBuffer,
+                    m_targetLOD,
+                    transform.position,
+                    m_onMeshGeneratedDelegate
+                );
+            }
+
+            return WorldManager.DualContouring.RequestMeshAsync
+            (
+                m_voxelVolumeBuffer,
+                m_currentLOD,
+                m_targetLOD,
+                m_vertexCount,
+                m_triangleCount,
+                transform.position,
+                m_onMeshGeneratedDelegate
+            );
         }
 
         private void ReleaseBuffers()
