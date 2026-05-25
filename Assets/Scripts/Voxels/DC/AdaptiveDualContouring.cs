@@ -6,7 +6,6 @@ using Tuntenfisch.Generics.Pool;
 using Tuntenfisch.Voxels.Materials;
 using Unity.Burst;
 using Unity.Collections;
-using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
@@ -24,12 +23,14 @@ namespace Tuntenfisch.Voxels.DC
         [SerializeField]
         private int m_initialTaskPoolPopulation = 0;
         [SerializeField]
-        private bool m_logQefDiagnostics = false;
+        private bool m_logLeafDiagnostics = false;
         [SerializeField]
-        private AdaptiveLeafBuildMode m_leafBuildMode = AdaptiveLeafBuildMode.ToyPattern;
-        [Min(0.0f)]
+        private float m_parentErrorThreshold = 0.01f;
         [SerializeField]
-        private float m_size2LeafErrorThreshold = 0.01f;
+        [Range(-1.0f, 1.0f)]
+        private float m_normalDotThreshold = 0.92f;
+        [SerializeField]
+        private bool m_splitOnMaterialChange = true;
 
         private VoxelConfig m_voxelConfig;
         private Queue<Task> m_tasks;
@@ -73,9 +74,10 @@ namespace Tuntenfisch.Voxels.DC
         {
             Task task = m_taskPool.Acquire();
             task.VoxelVolumeBuffer = voxelVolumeBuffer ?? throw new ArgumentNullException(nameof(voxelVolumeBuffer));
+            task.TargetLOD = targetLOD;
             task.Callback = callback ?? throw new ArgumentNullException(nameof(callback));
 
-            // AdaptiveBurst still ignores targetLOD and worldPosition in Milestone 2.
+            // AdaptiveBurst still ignores worldPosition; it meshes local chunk-space voxel data.
             if (m_availableWorkers.Count > 0)
             {
                 DispatchWorker(task);
@@ -130,12 +132,6 @@ namespace Tuntenfisch.Voxels.DC
             m_availableWorkers.Push(worker);
         }
 
-        internal enum AdaptiveLeafBuildMode : byte
-        {
-            ToyPattern = 0,
-            QefError = 1
-        }
-
         private sealed class Worker : IDisposable
         {
             public NativeArray<GPUVertex> Vertices => m_vertices.AsArray();
@@ -150,10 +146,12 @@ namespace Tuntenfisch.Voxels.DC
             private NativeArray<int> m_leafCount;
             private NativeArray<QefDiagnostics> m_qefDiagnostics;
             private NativeArray<LeafBuildDiagnostics> m_leafBuildDiagnostics;
+            private NativeList<OctreeBuildNode> m_buildStack;
             private NativeList<GPUVertex> m_vertices;
             private NativeList<int> m_indices;
             private AsyncGPUReadbackRequest m_readbackRequest;
             private JobHandle m_jobHandle;
+            private int m_targetLOD;
             private WorkerStatus m_status;
             private bool m_readbackStarted;
             private bool m_jobsScheduled;
@@ -170,6 +168,7 @@ namespace Tuntenfisch.Voxels.DC
             {
                 m_vertices.Clear();
                 m_indices.Clear();
+                m_targetLOD = task.TargetLOD;
                 m_readbackRequest = AsyncGPUReadback.Request(task.VoxelVolumeBuffer);
                 m_readbackStarted = true;
                 m_jobsScheduled = false;
@@ -212,10 +211,10 @@ namespace Tuntenfisch.Voxels.DC
                         Debug.LogWarning($"AdaptiveBurst leaf coverage issue: overlaps={leafBuildDiagnostics.OverlapCount}, unassigned={leafBuildDiagnostics.UnassignedCount}.");
                     }
 
-                    if (m_parent.m_logQefDiagnostics)
+                    if (m_parent.m_logLeafDiagnostics)
                     {
                         QefDiagnostics qefDiagnostics = m_qefDiagnostics[0];
-                        Debug.Log($"AdaptiveBurst leaves: total={leafBuildDiagnostics.LeafCount}, size1={leafBuildDiagnostics.Size1LeafCount}, size2={leafBuildDiagnostics.Size2LeafCount}, overlaps={leafBuildDiagnostics.OverlapCount}, unassigned={leafBuildDiagnostics.UnassignedCount}.");
+                        Debug.Log($"AdaptiveBurst leaves: total={leafBuildDiagnostics.LeafCount}, size1={leafBuildDiagnostics.Size1LeafCount}, size2={leafBuildDiagnostics.Size2LeafCount}, size4={leafBuildDiagnostics.Size4LeafCount}, size8={leafBuildDiagnostics.Size8LeafCount}, size16plus={leafBuildDiagnostics.Size16LeafCount}, overlaps={leafBuildDiagnostics.OverlapCount}, unassigned={leafBuildDiagnostics.UnassignedCount}, parentInactiveKept={leafBuildDiagnostics.ParentInactiveKept}, splitParentRejected={leafBuildDiagnostics.SplitByParentRejected}, splitParentError={leafBuildDiagnostics.SplitByParentError}, splitNormal={leafBuildDiagnostics.SplitByNormal}, splitMaterial={leafBuildDiagnostics.SplitByMaterial}.");
                         Debug.Log($"AdaptiveBurst QEF: total={qefDiagnostics.Total}, accepted={qefDiagnostics.Accepted}, outsideFallback={qefDiagnostics.OutsideFallback}, singularFallback={qefDiagnostics.SingularFallback}.");
                     }
 
@@ -251,17 +250,26 @@ namespace Tuntenfisch.Voxels.DC
             {
                 int numberOfCellsAlongAxis = m_parent.m_voxelConfig.VoxelVolumeConfig.NumberOfCellsAlongAxis;
                 int numberOfVoxelsAlongAxis = m_parent.m_voxelConfig.VoxelVolumeConfig.NumberOfVoxelsAlongAxis;
+                int interiorSize = numberOfCellsAlongAxis - 2;
+                int maxDepth = ComputePowerOfTwoExponent(interiorSize);
+                int minCellSize = 1 << math.clamp(m_targetLOD, 0, maxDepth);
 
                 JobHandle buildLeavesHandle = new BuildLeavesJob
                 {
                     Voxels = m_voxels,
                     Leaves = m_leaves,
+                    BuildStack = m_buildStack,
                     LeafCount = m_leafCount,
                     Diagnostics = m_leafBuildDiagnostics,
                     NumberOfVoxelsAlongAxis = numberOfVoxelsAlongAxis,
                     NumberOfCellsAlongAxis = numberOfCellsAlongAxis,
-                    BuildMode = m_parent.m_leafBuildMode,
-                    Size2LeafErrorThreshold = m_parent.m_size2LeafErrorThreshold
+                    RootMinCell = new int3(1, 1, 1),
+                    RootCellSize = interiorSize,
+                    MinCellSize = minCellSize,
+                    VoxelSpacing = m_parent.m_voxelConfig.VoxelVolumeConfig.VoxelSpacing,
+                    ParentErrorThreshold = m_parent.m_parentErrorThreshold,
+                    NormalDotThreshold = m_parent.m_normalDotThreshold,
+                    SplitOnMaterialChange = m_parent.m_splitOnMaterialChange
                 }.Schedule();
 
                 JobHandle fillDenseCellToLeafHandle = new FillDenseCellToLeafJob
@@ -332,6 +340,7 @@ namespace Tuntenfisch.Voxels.DC
                 m_leafCount = new NativeArray<int>(1, Allocator.Persistent);
                 m_qefDiagnostics = new NativeArray<QefDiagnostics>(1, Allocator.Persistent);
                 m_leafBuildDiagnostics = new NativeArray<LeafBuildDiagnostics>(1, Allocator.Persistent);
+                m_buildStack = new NativeList<OctreeBuildNode>(cellCount, Allocator.Persistent);
                 m_vertices = new NativeList<GPUVertex>(cellCount, Allocator.Persistent);
                 m_indices = new NativeList<int>(maxIndexCount, Allocator.Persistent);
             }
@@ -373,6 +382,11 @@ namespace Tuntenfisch.Voxels.DC
                     m_leafBuildDiagnostics.Dispose();
                 }
 
+                if (m_buildStack.IsCreated)
+                {
+                    m_buildStack.Dispose();
+                }
+
                 if (m_vertices.IsCreated)
                 {
                     m_vertices.Dispose();
@@ -382,6 +396,18 @@ namespace Tuntenfisch.Voxels.DC
                 {
                     m_indices.Dispose();
                 }
+            }
+
+            private static int ComputePowerOfTwoExponent(int value)
+            {
+                int exponent = 0;
+                while (value > 1)
+                {
+                    value >>= 1;
+                    exponent++;
+                }
+
+                return exponent;
             }
         }
 
@@ -401,12 +427,30 @@ namespace Tuntenfisch.Voxels.DC
             public bool Active;
         }
 
+        internal struct OctreeBuildNode
+        {
+            public int3 MinCell;
+            public int Size;
+        }
+
         internal struct LeafVertexData
         {
             public GPUVertex Vertex;
             public float Error;
             public QefPlacementResult PlacementResult;
             public bool Active;
+        }
+
+        internal struct LeafGeometry
+        {
+            public bool Active;
+            public float3 LocalPosition;
+            public float3 VolumePosition;
+            public float3 Normal;
+            public MaterialIndex MaterialIndex;
+            public float Error;
+            public int IntersectionCount;
+            public QefPlacementResult PlacementResult;
         }
 
         internal struct QefDiagnostics
@@ -440,8 +484,16 @@ namespace Tuntenfisch.Voxels.DC
             public int LeafCount;
             public int Size1LeafCount;
             public int Size2LeafCount;
+            public int Size4LeafCount;
+            public int Size8LeafCount;
+            public int Size16LeafCount;
             public int OverlapCount;
             public int UnassignedCount;
+            public int ParentInactiveKept;
+            public int SplitByParentRejected;
+            public int SplitByParentError;
+            public int SplitByNormal;
+            public int SplitByMaterial;
         }
 
         [BurstCompile]
@@ -450,48 +502,83 @@ namespace Tuntenfisch.Voxels.DC
             [ReadOnly]
             public NativeArray<PackedVoxel> Voxels;
             public NativeArray<AdaptiveLeafCell> Leaves;
+            public NativeList<OctreeBuildNode> BuildStack;
             public NativeArray<int> LeafCount;
             public NativeArray<LeafBuildDiagnostics> Diagnostics;
             public int NumberOfVoxelsAlongAxis;
             public int NumberOfCellsAlongAxis;
-            public AdaptiveLeafBuildMode BuildMode;
-            public float Size2LeafErrorThreshold;
+            public int3 RootMinCell;
+            public int RootCellSize;
+            public int MinCellSize;
+            public float VoxelSpacing;
+            public float ParentErrorThreshold;
+            public float NormalDotThreshold;
+            public bool SplitOnMaterialChange;
 
             public void Execute()
             {
                 int leafCount = 0;
                 LeafBuildDiagnostics diagnostics = default;
+                BuildStack.Clear();
 
-                for (int z = 0; z < NumberOfCellsAlongAxis; z += 2)
+                for (int z = 0; z < NumberOfCellsAlongAxis; z++)
                 {
-                    for (int y = 0; y < NumberOfCellsAlongAxis; y += 2)
+                    for (int y = 0; y < NumberOfCellsAlongAxis; y++)
                     {
-                        for (int x = 0; x < NumberOfCellsAlongAxis; x += 2)
+                        for (int x = 0; x < NumberOfCellsAlongAxis; x++)
                         {
                             int3 minCell = new int3(x, y, z);
-                            int3 blockDimensions = new int3(
-                                math.min(2, NumberOfCellsAlongAxis - x),
-                                math.min(2, NumberOfCellsAlongAxis - y),
-                                math.min(2, NumberOfCellsAlongAxis - z));
-
-                            if (math.any(blockDimensions < 2) || TouchesBoundary(minCell, 2, NumberOfCellsAlongAxis))
+                            if (!IsOuterDenseCell(minCell))
                             {
-                                EmitSizeOneLeaves(minCell, blockDimensions, ref leafCount, ref diagnostics);
-
                                 continue;
                             }
 
-                            bool shouldCoarsen = BuildMode == AdaptiveLeafBuildMode.ToyPattern
-                                ? ShouldUseToyCoarsePattern(minCell)
-                                : ShouldUseQefCoarseLeaf(minCell);
+                            EmitLeaf(minCell, 1, ref leafCount, ref diagnostics);
+                        }
+                    }
+                }
 
-                            if (shouldCoarsen)
+                if (RootCellSize > 0)
+                {
+                    BuildStack.Add(new OctreeBuildNode
+                    {
+                        MinCell = RootMinCell,
+                        Size = RootCellSize
+                    });
+                }
+
+                while (BuildStack.Length > 0)
+                {
+                    int lastIndex = BuildStack.Length - 1;
+                    OctreeBuildNode node = BuildStack[lastIndex];
+                    BuildStack.RemoveAt(lastIndex);
+
+                    if (node.Size <= MinCellSize)
+                    {
+                        EmitLeaf(node.MinCell, node.Size, ref leafCount, ref diagnostics);
+
+                        continue;
+                    }
+
+                    if (!ShouldSplitNode(node.MinCell, node.Size, ref diagnostics))
+                    {
+                        EmitLeaf(node.MinCell, node.Size, ref leafCount, ref diagnostics);
+
+                        continue;
+                    }
+
+                    int childSize = node.Size >> 1;
+                    for (int z = 1; z >= 0; z--)
+                    {
+                        for (int y = 1; y >= 0; y--)
+                        {
+                            for (int x = 1; x >= 0; x--)
                             {
-                                EmitLeaf(minCell, 2, ref leafCount, ref diagnostics);
-                            }
-                            else
-                            {
-                                EmitSizeOneLeaves(minCell, new int3(2, 2, 2), ref leafCount, ref diagnostics);
+                                BuildStack.Add(new OctreeBuildNode
+                                {
+                                    MinCell = node.MinCell + new int3(x, y, z) * childSize,
+                                    Size = childSize
+                                });
                             }
                         }
                     }
@@ -502,30 +589,116 @@ namespace Tuntenfisch.Voxels.DC
                 Diagnostics[0] = diagnostics;
             }
 
-            private bool ShouldUseQefCoarseLeaf(int3 minCell)
+            private bool ShouldSplitNode(int3 minCell, int size, ref LeafBuildDiagnostics diagnostics)
             {
-                return TryEvaluateLeafGeometry(Voxels, NumberOfVoxelsAlongAxis, minCell, 2, out _, out _, out _, out float error, out QefPlacementResult placementResult) &&
-                    placementResult == QefPlacementResult.Accepted &&
-                    error < Size2LeafErrorThreshold;
-            }
-
-            private static bool ShouldUseToyCoarsePattern(int3 minCell)
-            {
-                return (((minCell.x >> 1) + (minCell.y >> 1) + (minCell.z >> 1)) & 1) == 0;
-            }
-
-            private void EmitSizeOneLeaves(int3 minCell, int3 blockDimensions, ref int leafCount, ref LeafBuildDiagnostics diagnostics)
-            {
-                for (int z = 0; z < blockDimensions.z; z++)
+                LeafGeometry parent = EvaluateLeafGeometry(Voxels, NumberOfVoxelsAlongAxis, minCell, size, VoxelSpacing);
+                int childSize = size >> 1;
+                if (!parent.Active)
                 {
-                    for (int y = 0; y < blockDimensions.y; y++)
+                    if (HasAnyActiveChild(minCell, childSize))
                     {
-                        for (int x = 0; x < blockDimensions.x; x++)
+                        diagnostics.SplitByParentRejected++;
+
+                        return true;
+                    }
+
+                    diagnostics.ParentInactiveKept++;
+
+                    return false;
+                }
+
+                if (parent.PlacementResult != QefPlacementResult.Accepted)
+                {
+                    diagnostics.SplitByParentRejected++;
+
+                    return true;
+                }
+
+                int activeChildCount = 0;
+                float minNormalDot = 1.0f;
+                bool hasMaterial = false;
+                bool sameMaterial = true;
+                MaterialIndex firstMaterial = default;
+
+                for (int z = 0; z < 2; z++)
+                {
+                    for (int y = 0; y < 2; y++)
+                    {
+                        for (int x = 0; x < 2; x++)
                         {
-                            EmitLeaf(minCell + new int3(x, y, z), 1, ref leafCount, ref diagnostics);
+                            LeafGeometry child = EvaluateLeafGeometry(Voxels, NumberOfVoxelsAlongAxis, minCell + new int3(x, y, z) * childSize, childSize, VoxelSpacing);
+                            if (!child.Active)
+                            {
+                                continue;
+                            }
+
+                            activeChildCount++;
+                            minNormalDot = math.min(minNormalDot, math.abs(math.dot(parent.Normal, child.Normal)));
+
+                            if (!hasMaterial)
+                            {
+                                firstMaterial = child.MaterialIndex;
+                                hasMaterial = true;
+                            }
+                            else if (child.MaterialIndex != firstMaterial)
+                            {
+                                sameMaterial = false;
+                            }
                         }
                     }
                 }
+
+                if (activeChildCount == 0)
+                {
+                    return false;
+                }
+
+                float normalizedParentError = parent.Error / math.max(1, parent.IntersectionCount);
+
+                if (normalizedParentError > ParentErrorThreshold)
+                {
+                    diagnostics.SplitByParentError++;
+
+                    return true;
+                }
+
+                // Keep ratio diagnostics available for later tuning, but do not split nearly planar
+                // regions from tiny child errors while the size-1/2 heuristic is being validated.
+
+                if (minNormalDot < NormalDotThreshold)
+                {
+                    diagnostics.SplitByNormal++;
+
+                    return true;
+                }
+
+                if (SplitOnMaterialChange && !sameMaterial)
+                {
+                    diagnostics.SplitByMaterial++;
+
+                    return true;
+                }
+
+                return false;
+            }
+
+            private bool HasAnyActiveChild(int3 minCell, int childSize)
+            {
+                for (int z = 0; z < 2; z++)
+                {
+                    for (int y = 0; y < 2; y++)
+                    {
+                        for (int x = 0; x < 2; x++)
+                        {
+                            if (EvaluateLeafGeometry(Voxels, NumberOfVoxelsAlongAxis, minCell + new int3(x, y, z) * childSize, childSize, VoxelSpacing).Active)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                return false;
             }
 
             private void EmitLeaf(int3 minCell, int size, ref int leafCount, ref LeafBuildDiagnostics diagnostics)
@@ -539,16 +712,29 @@ namespace Tuntenfisch.Voxels.DC
                     Active = false
                 };
 
-                if (size == 1)
-                {
-                    diagnostics.Size1LeafCount++;
-                }
-                else
-                {
-                    diagnostics.Size2LeafCount++;
-                }
+                RecordLeafSize(size, ref diagnostics);
 
                 leafCount++;
+            }
+
+            private static void RecordLeafSize(int size, ref LeafBuildDiagnostics diagnostics)
+            {
+                switch (size)
+                {
+                    case 1: diagnostics.Size1LeafCount++; break;
+                    case 2: diagnostics.Size2LeafCount++; break;
+                    case 4: diagnostics.Size4LeafCount++; break;
+                    case 8: diagnostics.Size8LeafCount++; break;
+                    default: diagnostics.Size16LeafCount++; break;
+                }
+            }
+
+            private bool IsOuterDenseCell(int3 cell)
+            {
+                return cell.x == 0 || cell.y == 0 || cell.z == 0 ||
+                    cell.x == NumberOfCellsAlongAxis - 1 ||
+                    cell.y == NumberOfCellsAlongAxis - 1 ||
+                    cell.z == NumberOfCellsAlongAxis - 1;
             }
         }
 
@@ -632,19 +818,19 @@ namespace Tuntenfisch.Voxels.DC
                 }
 
                 AdaptiveLeafCell leaf = Leaves[index];
-                if (!TryEvaluateLeafGeometry(Voxels, NumberOfVoxelsAlongAxis, leaf.MinCell, leaf.Size, out float3 localPosition, out float3 vertexNormal, out MaterialIndex materialIndex, out float error, out QefPlacementResult placementResult))
+                LeafGeometry geometry = EvaluateLeafGeometry(Voxels, NumberOfVoxelsAlongAxis, leaf.MinCell, leaf.Size, VoxelSpacing);
+                if (!geometry.Active)
                 {
                     LeafVertexData[index] = default;
 
                     return;
                 }
 
-                float3 volumePosition = VoxelSpacing * (leaf.MinCell + localPosition * leaf.Size - 0.5f * (NumberOfVoxelsAlongAxis - 1.0f));
                 LeafVertexData[index] = new LeafVertexData
                 {
-                    Vertex = new GPUVertex(volumePosition, vertexNormal, materialIndex),
-                    Error = error,
-                    PlacementResult = placementResult,
+                    Vertex = new GPUVertex(geometry.VolumePosition, geometry.Normal, geometry.MaterialIndex),
+                    Error = geometry.Error,
+                    PlacementResult = geometry.PlacementResult,
                     Active = true
                 };
             }
@@ -818,11 +1004,18 @@ namespace Tuntenfisch.Voxels.DC
                     return;
                 }
 
+                FixedList32Bytes<int> boundary = default;
+                bool useI1First = axis == 1 ? flip : !flip;
+                boundary.Add(i0);
+                boundary.Add(useI1First ? i1 : i2);
+                boundary.Add(i3);
+                boundary.Add(useI1First ? i2 : i1);
+
                 FixedList32Bytes<int> unique = default;
-                AddUnique(ref unique, i0);
-                AddUnique(ref unique, i1);
-                AddUnique(ref unique, i2);
-                AddUnique(ref unique, i3);
+                for (int index = 0; index < boundary.Length; index++)
+                {
+                    AddUnique(ref unique, boundary[index]);
+                }
 
                 if (unique.Length < 3)
                 {
@@ -831,51 +1024,12 @@ namespace Tuntenfisch.Voxels.DC
 
                 if (unique.Length == 3)
                 {
-                    FixedList32Bytes<int> boundaryUnique = default;
-                    bool useForwardBoundaryOrder = axis == 1 ? flip : !flip;
-
-                    AddUnique(ref boundaryUnique, i0);
-                    AddUnique(ref boundaryUnique, useForwardBoundaryOrder ? i1 : i2);
-                    AddUnique(ref boundaryUnique, i3);
-                    AddUnique(ref boundaryUnique, useForwardBoundaryOrder ? i2 : i1);
-                    EmitTransitionTriangle(boundaryUnique[0], boundaryUnique[1], boundaryUnique[2]);
-
+                    EmitTriangle(unique[0], unique[1], unique[2]);
                     return;
                 }
 
-                EmitQuad(unique[0], unique[1], unique[2], unique[3], flip, axis);
-            }
-
-            private void EmitTransitionTriangle(int i0, int i1, int i2)
-            {
-                EmitTriangle(i0, i1, i2);
-            }
-
-            private void EmitQuad(int i0, int i1, int i2, int i3, bool flip, int axis)
-            {
-                if (axis == 1)
-                {
-                    if (flip)
-                    {
-                        EmitTriangle(i0, i1, i3);
-                        EmitTriangle(i0, i3, i2);
-                    }
-                    else
-                    {
-                        EmitTriangle(i0, i3, i1);
-                        EmitTriangle(i0, i2, i3);
-                    }
-                }
-                else if (flip)
-                {
-                    EmitTriangle(i0, i2, i3);
-                    EmitTriangle(i0, i3, i1);
-                }
-                else
-                {
-                    EmitTriangle(i0, i3, i2);
-                    EmitTriangle(i0, i1, i3);
-                }
+                EmitTriangle(unique[0], unique[1], unique[2]);
+                EmitTriangle(unique[0], unique[2], unique[3]);
             }
 
             private static void AddUnique(ref FixedList32Bytes<int> unique, int value)
@@ -1021,16 +1175,12 @@ namespace Tuntenfisch.Voxels.DC
             }
         }
 
-        internal static bool TryEvaluateLeafGeometry(
+        internal static LeafGeometry EvaluateLeafGeometry(
             NativeArray<PackedVoxel> voxels,
             int numberOfVoxelsAlongAxis,
             int3 minCell,
             int size,
-            out float3 localPosition,
-            out float3 vertexNormal,
-            out MaterialIndex materialIndex,
-            out float error,
-            out QefPlacementResult placementResult)
+            float voxelSpacing)
         {
             QefData qef = default;
             float3 positionSum = float3.zero;
@@ -1065,21 +1215,23 @@ namespace Tuntenfisch.Voxels.DC
 
             if (numberOfIntersections == 0)
             {
-                localPosition = float3.zero;
-                vertexNormal = float3.zero;
-                materialIndex = default;
-                error = 0.0f;
-                placementResult = QefPlacementResult.None;
-
-                return false;
+                return default;
             }
 
             float3 averagePosition = positionSum / numberOfIntersections;
-            qef.TrySolveInsideUnitCell(averagePosition, out localPosition, out error, out placementResult);
-            vertexNormal = math.normalizesafe(normalSum);
-            materialIndex = materialCounts.GetDominant();
+            qef.TrySolveInsideUnitCell(averagePosition, out float3 localPosition, out float error, out QefPlacementResult placementResult);
 
-            return true;
+            return new LeafGeometry
+            {
+                Active = true,
+                LocalPosition = localPosition,
+                VolumePosition = voxelSpacing * (minCell + localPosition * size - 0.5f * (numberOfVoxelsAlongAxis - 1.0f)),
+                Normal = math.normalizesafe(normalSum),
+                MaterialIndex = materialCounts.GetDominant(),
+                Error = error,
+                IntersectionCount = numberOfIntersections,
+                PlacementResult = placementResult
+            };
         }
 
         internal static bool TouchesBoundary(int3 minCell, int size, int numberOfCellsAlongAxis)
@@ -1140,6 +1292,7 @@ namespace Tuntenfisch.Voxels.DC
         {
             public bool Canceled { get; private set; }
             public ComputeBuffer VoxelVolumeBuffer { get; set; }
+            public int TargetLOD { get; set; }
             public OnMeshGenerated Callback { get; set; }
 
             public void OnAcquire() { }
@@ -1147,6 +1300,7 @@ namespace Tuntenfisch.Voxels.DC
             public void OnRelease()
             {
                 VoxelVolumeBuffer = null;
+                TargetLOD = 0;
                 Callback = null;
                 Canceled = false;
             }

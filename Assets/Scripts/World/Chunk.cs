@@ -206,7 +206,6 @@ namespace Tuntenfisch.World
         private void OnMeshGenerated(NativeArray<GPUVertex> vertices, int vertexCount, int vertexStartIndex, NativeArray<int> triangles, int triangleCount, int triangleStartIndex)
         {
             m_request = null;
-            // TODO: AdaptiveBurst generates dense LOD0 even when this stores the requested LOD.
             m_currentLOD = m_targetLOD;
             m_vertexCount = vertexCount;
             m_triangleCount = triangleCount;
